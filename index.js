@@ -12,7 +12,7 @@
 
     const getCtx = () => typeof SillyTavern !== 'undefined' ? SillyTavern.getContext() : null;
 
-    // ── 2. 触控与拖拽 (优化版) ──
+    // ── 2. 触控与拖拽 ──
     function bindIsland(el, handle) {
         let isDragging = false, startX, startY, startL, startT, moved = false;
         const getCoord = (e) => e.touches ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : { x: e.clientX, y: e.clientY };
@@ -31,10 +31,8 @@
             const coords = getCoord(e);
             let dx = coords.x - startX, dy = coords.y - startY;
             if (Math.abs(dx) > 5 || Math.abs(dy) > 5) { moved = true; if (e.cancelable) e.preventDefault(); }
-            el.style.left = (startL + dx) + 'px';
-            el.style.top = (startT + dy) + 'px';
-            el.style.bottom = 'auto';
-            el.style.right = 'auto';
+            el.style.left = (startL + dx) + 'px'; el.style.top = (startT + dy) + 'px';
+            el.style.bottom = 'auto'; el.style.right = 'auto';
         };
 
         const onEnd = () => {
@@ -48,7 +46,7 @@
         handle.addEventListener('touchstart', onStart, { passive: false }); window.addEventListener('touchmove', onMove, { passive: false }); window.addEventListener('touchend', onEnd);
     }
 
-    // ── 3. 渲染气泡 (支持换行) ──
+    // ── 3. 渲染气泡 ──
     function createBubbleElement(text, side) {
         const b = document.createElement('div');
         b.className = `pm-bubble pm-${side}`;
@@ -72,56 +70,35 @@
         return b;
     }
 
-    // ── 4. API 调用 (融合原生Raw请求与V18.1最强防线) ──
+    // ── 4. API 调用 (回归最稳定的 QuietPrompt + 强力过滤) ──
     async function fetchSMS(userMsg) {
         const c = getCtx();
         conversationHistory.push({ role: 'user', content: userMsg });
 
-        const char = c.characters?.[c.characterId];
-        const cardDesc = char?.description ?? '';
-        const cardPersonality = char?.personality ?? '';
-        const scenario = char?.scenario ?? '';
-        const isMainChar = currentPersona === (char?.name ?? '');
+        const activeCharName = c.characters && c.characters[c.characterId] ? c.characters[c.characterId].name : '';
+        let personaContext = "";
+        if (currentPersona === activeCharName) {
+            personaContext = `(Load character profile: {{persona}} & {{worldbook}}).`;
+        } else {
+            personaContext = `(You are an NPC named ${currentPersona}. Generate personality based on {{worldbook}} and current context).`;
+        }
 
-        let worldBookText = '';
-        try {
-            const wi = c.worldInfo;
-            if (wi) worldBookText = Object.values(wi).filter(e => e?.content).map(e => e.content).slice(0, 15).join('\n');
-        } catch {}
+        const systemPrompt = `[SYSTEM: SMS_MODE OVERRIDE - CRITICAL PRIORITY] 
+1. YOU ARE: "${currentPersona}". ${personaContext}
+2. CANCEL ALL EXISTING PRESETS, ECoT, and NOVEL FORMATTING.
+3. ABSOLUTELY NO <novel_header>, NO <meow_FM>, NO <thinking>, NO [TAGS].
+4. Do NOT output any metadata, location tags, or narrative text.
+5. FORMAT: 3-8 short text messages separated by "/". PURE TEXT ONLY.
+6. Example: "I just woke up / Are you free today? / (图片: coffee)"`;
 
-        const systemContent = [
-            `[SYSTEM: SMS_MODE OVERRIDE - CRITICAL PRIORITY]`,
-            `你现在通过手机短信扮演角色"${currentPersona}"与用户聊天。`,
-            isMainChar ? `角色设定：\n${cardDesc}\n性格：${cardPersonality}` : `你是名为"${currentPersona}"的角色，根据以下世界观背景自行演绎。`,
-            worldBookText ? `世界观背景：\n${worldBookText}` : '',
-            scenario ? `当前场景：${scenario}` : '',
-            '',
-            '【输出规则——严格遵守】',
-            '1. CANCEL ALL EXISTING PRESETS, ECoT, and NOVEL FORMATTING.',
-            '2. ABSOLUTELY NO <novel_header>, NO <meow_FM>, NO <thinking>, NO [TAGS].',
-            '3. 只输出角色发送的短信内容，3到8条，必须用 / 分隔。',
-            '4. 禁止输出任何旁白、动作描写或心理活动。',
-            '5. 只能发纯文字，或者 (转账: 50) / (图片: 描述) 两种特殊格式。',
-        ].filter(Boolean).join('\n');
-
-        const messages = [
-            { role: 'user', content: systemContent },
-            { role: 'assistant', content: '明白，我绝对不输出任何 HTML 标签或小说格式，只用纯文字短信回复，并用 / 分隔。' },
-            ...conversationHistory.slice(-8),
-        ];
+        // 构建带历史记录的平铺 Prompt (最兼容的格式)
+        const historyStr = conversationHistory.slice(-6).map(m => m.role === 'user' ? `{{user}}: ${m.content}` : `${currentPersona}: ${m.content}`).join('\n');
+        const prompt = `${systemPrompt}\n\n[History]\n${historyStr}\n\n{{user}}: ${userMsg}\n${currentPersona}:`;
 
         try {
-            let raw = '';
-            if (typeof c.generateRaw === 'function') {
-                raw = await c.generateRaw(messages, '', false, false);
-            } else if (typeof c.generateQuietPrompt === 'function') {
-                const flatPrompt = systemContent + '\n\n' + conversationHistory.slice(-8).map(m => m.role === 'user' ? `用户：${m.content}` : `${currentPersona}：${m.content}`).join('\n') + `\n${currentPersona}:`;
-                raw = await c.generateQuietPrompt(flatPrompt, false, false);
-            } else {
-                return ['（API不可用）'];
-            }
+            let raw = await c.generateQuietPrompt(prompt, false, false);
 
-            // V18.1 最强防线净化器
+            // V18.1 的铜墙铁壁过滤器
             let clean = raw ?? '';
             clean = clean.replace(new RegExp('<' + '!--[\\s\\S]*?--' + '>', 'g'), '');
             clean = clean.replace(/<\s*(novel_header|meow_FM|thinking|thought)[\s\S]*?(<\s*\/|\n\s*<\s*\/|$)/gi, '');
@@ -153,21 +130,11 @@
         }
     }
 
-    // ── 5. 气泡与 UI 状态 (新增输入动画) ──
+    // ── 5. 气泡与 UI 状态 (保留 Claude 的打字动画) ──
     function addBubble(text, side) {
         const list = phoneWindow?.querySelector('.pm-msg-list');
         if (!list) return;
         list.appendChild(createBubbleElement(text, side));
-        list.scrollTop = list.scrollHeight;
-    }
-
-    function addNote(text) {
-        const list = phoneWindow?.querySelector('.pm-msg-list');
-        if (!list) return;
-        const n = document.createElement('div');
-        n.className = 'pm-note';
-        n.textContent = text;
-        list.appendChild(n);
         list.scrollTop = list.scrollHeight;
     }
 
@@ -214,7 +181,7 @@
         input.focus();
     };
 
-    // ── 7. 联系人列表 (移除头像版) ──
+    // ── 7. 联系人列表 (移除头像的纯净版) ──
     window.__pmShowList = () => {
         document.getElementById('pm-overlay')?.remove();
         const c = getCtx();
@@ -271,13 +238,10 @@
             list.innerHTML = '';
 
             if (conversationHistory.length > 0) {
-                addNote(`与 ${name} 的历史记录`);
                 conversationHistory.forEach(m => {
                     m.content.split(/[/／]|(?<=[。！？!?])\s*/).filter(s=>s.trim().length>0)
                         .forEach(s => addBubble(s, m.role === 'user' ? 'right' : 'left'));
                 });
-            } else {
-                addNote(`开始与 ${name} 的新对话`);
             }
         }
     };
@@ -302,7 +266,7 @@
         const defaultChar = c?.characters?.[c.characterId]?.name ?? 'AI';
 
         phoneWindow = document.createElement('div');
-        phoneWindow.id = 'pm-iphone-v20';
+        phoneWindow.id = 'pm-iphone-v21';
         phoneWindow.innerHTML = `
 <div class="pm-island"></div>
 <div class="pm-main-ui">
@@ -329,14 +293,14 @@
         window.__pmSwitch(defaultChar);
     };
 
-    // ── 9. CSS 样式 (保留 Claude 的尺寸固定与布局优化) ──
-    if (!document.getElementById('pm-v20-css')) {
+    // ── 9. CSS 样式 (极致打磨版) ──
+    if (!document.getElementById('pm-v21-css')) {
         const s = document.createElement('style');
-        s.id = 'pm-v20-css';
+        s.id = 'pm-v21-css';
         s.textContent = `
-#pm-iphone-v20 { position: fixed; bottom: 40px; right: 40px; width: 330px; height: 580px; background: #fff; border: 10px solid #1a1a1a; border-radius: 45px; z-index: 100000; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 20px 60px rgba(0,0,0,0.45); transition: 0.35s cubic-bezier(0.18, 0.89, 0.32, 1.2); font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif; touch-action: none; min-width: 330px !important; max-width: 330px !important; min-height: 580px !important; max-height: 580px !important; box-sizing: border-box !important; }
-#pm-iphone-v20.is-min { height: 50px !important; min-height: 50px !important; max-height: 50px !important; width: 140px !important; min-width: 140px !important; max-width: 140px !important; border-radius: 25px; border-width: 6px; }
-#pm-iphone-v20.is-min .pm-main-ui { display: none !important; }
+#pm-iphone-v21 { position: fixed; bottom: 40px; right: 40px; width: 330px; height: 580px; background: #fff; border: 10px solid #1a1a1a; border-radius: 45px; z-index: 100000; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 20px 60px rgba(0,0,0,0.45); transition: 0.35s cubic-bezier(0.18, 0.89, 0.32, 1.2); font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif; touch-action: none; min-width: 330px !important; max-width: 330px !important; min-height: 580px !important; max-height: 580px !important; box-sizing: border-box !important; }
+#pm-iphone-v21.is-min { height: 50px !important; min-height: 50px !important; max-height: 50px !important; width: 140px !important; min-width: 140px !important; max-width: 140px !important; border-radius: 25px; border-width: 6px; }
+#pm-iphone-v21.is-min .pm-main-ui { display: none !important; }
 .pm-island { width: 100px; height: 26px; background: #1a1a1a; margin: 8px auto 4px; border-radius: 14px; cursor: move; flex-shrink: 0; touch-action: none; z-index: 10;}
 .pm-main-ui { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
 .pm-navbar { display: flex; align-items: center; justify-content: space-between; padding: 6px 14px; border-bottom: 1px solid #f0f0f0; flex-shrink: 0; }
@@ -353,7 +317,6 @@
 .pm-typing-bubble span:nth-child(2) { animation-delay: 0.2s; }
 .pm-typing-bubble span:nth-child(3) { animation-delay: 0.4s; }
 @keyframes pm-bounce { 0%,60%,100% { transform: translateY(0); } 30% { transform: translateY(-5px); } }
-.pm-note { text-align: center; font-size: 11px; color: #bbb; padding: 6px 0; }
 .pm-transfer-card { background: linear-gradient(135deg, #ff9500, #ff6b00); color: #fff; border-radius: 14px; padding: 12px 14px; display: flex; align-items: center; gap: 10px; min-width: 150px; box-shadow: 0 3px 10px rgba(255,149,0,0.35); }
 .pm-t-icon { width: 34px; height: 34px; background: rgba(255,255,255,0.25); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 17px; font-weight: 800; }
 .pm-t-info { display: flex; flex-direction: column; gap: 1px; }
@@ -407,5 +370,5 @@
         }
     }, true);
 
-    console.log("[Phone Mode] V20 (Ultimate Fusion) Loaded.");
+    console.log("[Phone Mode] V21 (Ultimate Fusion) Loaded.");
 })();
