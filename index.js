@@ -46,18 +46,27 @@
         handle.addEventListener('touchstart', onStart, { passive: false }); window.addEventListener('touchmove', onMove, { passive: false }); window.addEventListener('touchend', onEnd);
     }
 
-    // ── 3. 专杀 ECoT 净化器 ──
+    // ── 3. 终极净化器 (专杀带下划线及畸形标签) ──
     function processResponse(text) {
         if (!text) return [];
         let clean = text.replace(/&lt;/g, '<').replace(/&gt;/g, '>');
         
         clean = clean.replace(new RegExp('<' + '!--[\\s\\S]*?--' + '>', 'g'), '');
-        clean = clean.replace(/<[A-Za-z]+>[\s\S]*?<\/[A-Za-z]+>/g, '');
+        
+        // 核心修复1：点名绞杀特定的顽固标签（处理残缺或带换行的畸形闭合）
+        clean = clean.replace(/<\s*(novel_header|meow_FM|thinking|thought)[\s\S]*?(<\s*\/|\n\s*<\s*\/|$)/gi, '');
+        
+        // 核心修复2：支持带下划线字母数字的常规标签绞杀 ([\w-] 包含了 a-z, 0-9 和下划线)
+        clean = clean.replace(/<\s*([\w-]+)\s*>[\s\S]*?<\s*\/\s*\1\s*>/gi, '');
+        
         clean = clean.replace(/\[[A-Za-z0-9_]+\]/g, '');
         clean = clean.replace(/\*[^*]+\*/g, '');
         clean = clean.replace(/[\(（](?!\s*(转账|图片|系统))[^\)）]+[\)\）]/g, '');
         
         clean = clean.replace(/^.{0,15}(:|：)\s*/, '');
+        
+        // 残余的任何裸露单标签强行删除
+        clean = clean.replace(/<\/?[\w-]+\s*\/?>/g, '');
         clean = clean.trim();
         
         let chunks = clean.split(/[/／]/).map(s => s.trim()).filter(s => s.length > 0);
@@ -89,7 +98,7 @@
         return b;
     }
 
-    // ── 5. API 呼叫 ──
+    // ── 5. API 呼叫 (高压精准打击指令) ──
     async function fetchSMS(userMsg) {
         const c = getCtx();
         conversationHistory.push({ role: 'user', content: userMsg });
@@ -102,12 +111,14 @@
             personaContext = `(You are an NPC named ${currentPersona}. Generate personality based on {{worldbook}} and current context).`;
         }
 
-        const systemPrompt = `[SYSTEM: SMS_MODE OVERRIDE] 
+        // 核心修复3：系统指令直接点名封杀 novel_header 等结构
+        const systemPrompt = `[SYSTEM: SMS_MODE OVERRIDE - CRITICAL PRIORITY] 
 1. YOU ARE: "${currentPersona}". ${personaContext}
-2. CANCEL ALL ECoT, writing instructions, and novel formatting.
-3. NO HTML COMMENTS. NO [TAGS]. NO <thinking>. NO NARRATION.
-4. FORMAT: 3-8 short messages separated by "/". PURE TEXT ONLY.
-5. Example: "Message 1 / Message 2 / (图片: description) / (转账: 50)"`;
+2. CANCEL ALL EXISTING PRESETS, ECoT, and NOVEL FORMATTING.
+3. ABSOLUTELY NO <novel_header>, NO <meow_FM>, NO <thinking>, NO [TAGS].
+4. Do NOT output any metadata, location tags, or narrative text.
+5. FORMAT: 3-8 short text messages separated by "/". PURE TEXT ONLY.
+6. Example: "I just woke up / Are you free today? / (图片: coffee)"`;
 
         const prompt = `${systemPrompt}\n\n[History]\n${conversationHistory.slice(-4).map(m => m.content).join('\n')}\n\n{{user}}: ${userMsg}\n${currentPersona}:`;
 
@@ -126,7 +137,7 @@
         } catch (e) { return ["（发送失败）"]; }
     }
 
-    // ── 6. UI 交互 ──
+    // ── 6. UI 交互 (纯净V18逻辑) ──
     function addBubble(text, side) {
         const list = phoneWindow?.querySelector('.pm-msg-list');
         if (!list) return;
@@ -154,7 +165,6 @@
     };
 
     window.__pmShowList = () => {
-        // 核心修复1：打开新列表前，先干掉旧的弹窗，防止层叠
         if (document.getElementById('pm-overlay')) document.getElementById('pm-overlay').remove();
         
         const c = getCtx();
@@ -163,7 +173,6 @@
         const ov = document.createElement('div');
         ov.id = 'pm-overlay';
         
-        // 核心修复2：给叉号和按钮加上 cursor: pointer
         ov.innerHTML = `
             <div class="pm-modal">
                 <div style="display:flex;justify-content:space-between;margin-bottom:15px;align-items:center;">
@@ -217,7 +226,7 @@
         try { window.__pmHistories = JSON.parse(localStorage.getItem('ST_SMS_DATA_V2')) || {}; } catch(e) {}
 
         phoneWindow = document.createElement('div');
-        phoneWindow.id = 'pm-iphone-v18';
+        phoneWindow.id = 'pm-iphone-v18-plus';
         phoneWindow.innerHTML = `
             <div class="pm-island"></div>
             <div class="pm-main-ui">
@@ -240,9 +249,9 @@
     };
 
     const css = `
-        #pm-iphone-v18 { position: fixed; bottom: 40px; right: 40px; width: 330px; height: 580px; background: #fff; border: 10px solid #111; border-radius: 45px; z-index: 100000; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 20px 50px rgba(0,0,0,0.4); transition: 0.35s cubic-bezier(0.18, 0.89, 0.32, 1.2); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; touch-action: none; }
-        #pm-iphone-v18.is-min { height: 48px; width: 130px; border-radius: 24px; border-width: 6px; }
-        #pm-iphone-v18.is-min .pm-main-ui { display: none; }
+        #pm-iphone-v18-plus { position: fixed; bottom: 40px; right: 40px; width: 330px; height: 580px; background: #fff; border: 10px solid #111; border-radius: 45px; z-index: 100000; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 20px 50px rgba(0,0,0,0.4); transition: 0.35s cubic-bezier(0.18, 0.89, 0.32, 1.2); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; touch-action: none; }
+        #pm-iphone-v18-plus.is-min { height: 48px; width: 130px; border-radius: 24px; border-width: 6px; }
+        #pm-iphone-v18-plus.is-min .pm-main-ui { display: none; }
         .pm-island { width: 100px; height: 26px; background: #000; margin: 10px auto; border-radius: 15px; cursor: move; flex-shrink: 0; touch-action: none; z-index: 10; }
         .pm-main-ui { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
         .pm-navbar { display: flex; align-items: center; justify-content: space-between; padding: 5px 15px; border-bottom: 1px solid #f2f2f7; }
@@ -266,8 +275,8 @@
         .pm-li i { color: #fff; background: #ff3b30; cursor: pointer; font-style: normal; font-size: 12px; padding: 4px 10px; border-radius: 10px; font-weight: bold; }
     `;
 
-    if (!document.getElementById('pm-v18-css')) {
-        const s = document.createElement('style'); s.id = 'pm-v18-css'; s.innerHTML = css; document.head.appendChild(s);
+    if (!document.getElementById('pm-v18-plus-css')) {
+        const s = document.createElement('style'); s.id = 'pm-v18-plus-css'; s.innerHTML = css; document.head.appendChild(s);
     }
 
     document.addEventListener('keydown', e => {
@@ -282,13 +291,5 @@
         }
     }, true);
 
-    if (typeof window.SlashCommandParser !== 'undefined' && window.SlashCommandParser.addCommandObject) {
-        try {
-            window.SlashCommandParser.addCommandObject(
-                window.SlashCommandParser.registerCommand('phone', () => { window.__pmOpen(); return ''; }, [], 'Open Phone', true, true)
-            );
-        } catch(err) {}
-    }
-
-    console.log("iPhone SMS V18 (UI Details Polished) Loaded.");
+    console.log("iPhone SMS V18.1 (Anti-ECoT Nuke Edition) Loaded.");
 })();
