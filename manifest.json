@@ -1,7 +1,7 @@
 {
     "name": "手机短信模式",
     "display_name": "📱 Phone Mode",
-    "version": "3.1.0",
+    "version": "1.1.0",
     "description": "模拟手机短信聊天界面，支持多联系人切换和记录保存。",
     "author": "Gemini AI Helper",
     "js": "index.js"
