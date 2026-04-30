@@ -8,7 +8,7 @@
 2. 找到「从 URL 安装」输入框
 3. 粘贴以下链接并安装：
 
-https://github.com/K20070831/sillytavern-phone-mode
+https://github.com/K20070831/sillytavern-phone-mode-1
 
 ## 使用方法
 
