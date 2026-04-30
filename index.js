@@ -46,7 +46,7 @@
         handle.addEventListener('touchstart', onStart, { passive: false }); window.addEventListener('touchmove', onMove, { passive: false }); window.addEventListener('touchend', onEnd);
     }
 
-    // ── 3. 专杀 ECoT 净化器 (修复贪吃蛇 Bug) ──
+    // ── 3. 专杀 ECoT 净化器 ──
     function processResponse(text) {
         if (!text) return [];
         let clean = text.replace(/&lt;/g, '<').replace(/&gt;/g, '>');
@@ -55,10 +55,8 @@
         clean = clean.replace(/<[A-Za-z]+>[\s\S]*?<\/[A-Za-z]+>/g, '');
         clean = clean.replace(/\[[A-Za-z0-9_]+\]/g, '');
         clean = clean.replace(/\*[^*]+\*/g, '');
-        // 允许 (图片: xxx) (转账: xxx) 存活
         clean = clean.replace(/[\(（](?!\s*(转账|图片|系统))[^\)）]+[\)\）]/g, '');
         
-        // 核心修复：只在文本最开头的 15 个字符内寻找冒号（防止把句子里的冒号给吞了）
         clean = clean.replace(/^.{0,15}(:|：)\s*/, '');
         clean = clean.trim();
         
@@ -69,13 +67,12 @@
         return chunks.slice(0, 8);
     }
 
-    // ── 4. 渲染气泡 (图片与转账特效) ──
+    // ── 4. 渲染气泡 ──
     function createBubbleElement(text, side) {
         const b = document.createElement('div');
         b.className = `pm-bubble pm-${side}`;
         let html = text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
         
-        // 匹配 (图片：猫) 和 (转账+100)
         html = html.replace(/[\(（]\s*(转账|图片)\s*[+：:\s]*([^)）]+)[\)\）]/g, (match, type, content) => {
             if (type === '转账') {
                 let amount = parseFloat(content) || 100;
@@ -92,7 +89,7 @@
         return b;
     }
 
-    // ── 5. API 呼叫 (处理身份和强制切分) ──
+    // ── 5. API 呼叫 ──
     async function fetchSMS(userMsg) {
         const c = getCtx();
         conversationHistory.push({ role: 'user', content: userMsg });
@@ -157,19 +154,27 @@
     };
 
     window.__pmShowList = () => {
+        // 核心修复1：打开新列表前，先干掉旧的弹窗，防止层叠
+        if (document.getElementById('pm-overlay')) document.getElementById('pm-overlay').remove();
+        
         const c = getCtx();
         const id = `${c.characterId}_${c.chat_file || 'default'}`;
         const list = Object.keys(window.__pmHistories[id] || {});
         const ov = document.createElement('div');
         ov.id = 'pm-overlay';
+        
+        // 核心修复2：给叉号和按钮加上 cursor: pointer
         ov.innerHTML = `
             <div class="pm-modal">
-                <div style="display:flex;justify-content:space-between;margin-bottom:15px"><b>联系人管理</b><span onclick="this.closest('#pm-overlay').remove()">✕</span></div>
-                <div style="max-height:200px;overflow-y:auto">
+                <div style="display:flex;justify-content:space-between;margin-bottom:15px;align-items:center;">
+                    <b style="font-size:16px;">联系人管理</b>
+                    <span onclick="this.closest('#pm-overlay').remove()" style="cursor:pointer;font-size:22px;color:#999;line-height:1;">✕</span>
+                </div>
+                <div style="max-height:200px;overflow-y:auto;margin-bottom:10px;">
                     ${list.map(n => `<div class="pm-li"><span onclick="window.__pmSwitch('${n}')">${n}</span><i onclick="window.__pmDel('${n}')">移除</i></div>`).join('')}
                 </div>
-                <input id="pm-add" placeholder="新名字..." style="width:100%;padding:8px;margin-top:10px;border-radius:8px;border:1px solid #ddd;box-sizing:border-box">
-                <button onclick="window.__pmSwitch(document.getElementById('pm-add').value)" style="width:100%;margin-top:10px;padding:10px;background:#007aff;color:#fff;border:none;border-radius:10px">添加并切换</button>
+                <input id="pm-add" placeholder="新名字..." style="width:100%;padding:10px;border-radius:8px;border:1px solid #ddd;box-sizing:border-box;outline:none;margin-bottom:12px;">
+                <button onclick="window.__pmSwitch(document.getElementById('pm-add').value)" style="width:100%;padding:12px;background:#007aff;color:#fff;border:none;border-radius:10px;cursor:pointer;font-weight:bold;font-size:15px;">添加并切换</button>
             </div>`;
         document.body.appendChild(ov);
     };
@@ -212,7 +217,7 @@
         try { window.__pmHistories = JSON.parse(localStorage.getItem('ST_SMS_DATA_V2')) || {}; } catch(e) {}
 
         phoneWindow = document.createElement('div');
-        phoneWindow.id = 'pm-iphone-v17';
+        phoneWindow.id = 'pm-iphone-v18';
         phoneWindow.innerHTML = `
             <div class="pm-island"></div>
             <div class="pm-main-ui">
@@ -235,9 +240,9 @@
     };
 
     const css = `
-        #pm-iphone-v17 { position: fixed; bottom: 40px; right: 40px; width: 330px; height: 580px; background: #fff; border: 10px solid #111; border-radius: 45px; z-index: 100000; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 20px 50px rgba(0,0,0,0.4); transition: 0.35s cubic-bezier(0.18, 0.89, 0.32, 1.2); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; touch-action: none; }
-        #pm-iphone-v17.is-min { height: 48px; width: 130px; border-radius: 24px; border-width: 6px; }
-        #pm-iphone-v17.is-min .pm-main-ui { display: none; }
+        #pm-iphone-v18 { position: fixed; bottom: 40px; right: 40px; width: 330px; height: 580px; background: #fff; border: 10px solid #111; border-radius: 45px; z-index: 100000; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 20px 50px rgba(0,0,0,0.4); transition: 0.35s cubic-bezier(0.18, 0.89, 0.32, 1.2); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; touch-action: none; }
+        #pm-iphone-v18.is-min { height: 48px; width: 130px; border-radius: 24px; border-width: 6px; }
+        #pm-iphone-v18.is-min .pm-main-ui { display: none; }
         .pm-island { width: 100px; height: 26px; background: #000; margin: 10px auto; border-radius: 15px; cursor: move; flex-shrink: 0; touch-action: none; z-index: 10; }
         .pm-main-ui { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
         .pm-navbar { display: flex; align-items: center; justify-content: space-between; padding: 5px 15px; border-bottom: 1px solid #f2f2f7; }
@@ -256,13 +261,13 @@
         .pm-up-btn { width: 32px; height: 32px; background: #007aff; color: #fff; border: none; border-radius: 50%; cursor: pointer; font-weight: bold; font-size: 16px; display: flex; align-items: center; justify-content: center; }
         #pm-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 100001; display: flex; align-items: center; justify-content: center; }
         .pm-modal { background: #fff; padding: 20px; border-radius: 25px; width: 280px; box-shadow: 0 20px 40px rgba(0,0,0,0.3); font-family: sans-serif; }
-        .pm-li { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #f2f2f7; font-size: 14px; }
-        .pm-li span { color: #007aff; cursor: pointer; }
-        .pm-li i { color: #ff3b30; cursor: pointer; font-style: normal; }
+        .pm-li { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #f2f2f7; font-size: 14px; align-items: center; }
+        .pm-li span { color: #007aff; cursor: pointer; flex: 1; font-weight: 500; }
+        .pm-li i { color: #fff; background: #ff3b30; cursor: pointer; font-style: normal; font-size: 12px; padding: 4px 10px; border-radius: 10px; font-weight: bold; }
     `;
 
-    if (!document.getElementById('pm-v17-css')) {
-        const s = document.createElement('style'); s.id = 'pm-v17-css'; s.innerHTML = css; document.head.appendChild(s);
+    if (!document.getElementById('pm-v18-css')) {
+        const s = document.createElement('style'); s.id = 'pm-v18-css'; s.innerHTML = css; document.head.appendChild(s);
     }
 
     document.addEventListener('keydown', e => {
@@ -285,5 +290,5 @@
         } catch(err) {}
     }
 
-    console.log("iPhone SMS V17 (Colon Bug Fixed) Loaded.");
+    console.log("iPhone SMS V18 (UI Details Polished) Loaded.");
 })();
