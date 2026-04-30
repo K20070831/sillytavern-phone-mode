@@ -154,6 +154,7 @@
     };
 
     window.__pmShowList = () => {
+        // 核心修复1：打开新列表前，先干掉旧的弹窗，防止层叠
         if (document.getElementById('pm-overlay')) document.getElementById('pm-overlay').remove();
         
         const c = getCtx();
@@ -162,6 +163,7 @@
         const ov = document.createElement('div');
         ov.id = 'pm-overlay';
         
+        // 核心修复2：给叉号和按钮加上 cursor: pointer
         ov.innerHTML = `
             <div class="pm-modal">
                 <div style="display:flex;justify-content:space-between;margin-bottom:15px;align-items:center;">
@@ -215,7 +217,7 @@
         try { window.__pmHistories = JSON.parse(localStorage.getItem('ST_SMS_DATA_V2')) || {}; } catch(e) {}
 
         phoneWindow = document.createElement('div');
-        phoneWindow.id = 'pm-iphone-v19';
+        phoneWindow.id = 'pm-iphone-v18';
         phoneWindow.innerHTML = `
             <div class="pm-island"></div>
             <div class="pm-main-ui">
@@ -238,9 +240,9 @@
     };
 
     const css = `
-        #pm-iphone-v19 { position: fixed; bottom: 40px; right: 40px; width: 330px; height: 580px; background: #fff; border: 10px solid #111; border-radius: 45px; z-index: 100000; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 20px 50px rgba(0,0,0,0.4); transition: 0.35s cubic-bezier(0.18, 0.89, 0.32, 1.2); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; touch-action: none; }
-        #pm-iphone-v19.is-min { height: 48px; width: 130px; border-radius: 24px; border-width: 6px; }
-        #pm-iphone-v19.is-min .pm-main-ui { display: none; }
+        #pm-iphone-v18 { position: fixed; bottom: 40px; right: 40px; width: 330px; height: 580px; background: #fff; border: 10px solid #111; border-radius: 45px; z-index: 100000; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 20px 50px rgba(0,0,0,0.4); transition: 0.35s cubic-bezier(0.18, 0.89, 0.32, 1.2); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; touch-action: none; }
+        #pm-iphone-v18.is-min { height: 48px; width: 130px; border-radius: 24px; border-width: 6px; }
+        #pm-iphone-v18.is-min .pm-main-ui { display: none; }
         .pm-island { width: 100px; height: 26px; background: #000; margin: 10px auto; border-radius: 15px; cursor: move; flex-shrink: 0; touch-action: none; z-index: 10; }
         .pm-main-ui { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
         .pm-navbar { display: flex; align-items: center; justify-content: space-between; padding: 5px 15px; border-bottom: 1px solid #f2f2f7; }
@@ -264,42 +266,10 @@
         .pm-li i { color: #fff; background: #ff3b30; cursor: pointer; font-style: normal; font-size: 12px; padding: 4px 10px; border-radius: 10px; font-weight: bold; }
     `;
 
-    if (!document.getElementById('pm-v19-css')) {
-        const s = document.createElement('style'); s.id = 'pm-v19-css'; s.innerHTML = css; document.head.appendChild(s);
+    if (!document.getElementById('pm-v18-css')) {
+        const s = document.createElement('style'); s.id = 'pm-v18-css'; s.innerHTML = css; document.head.appendChild(s);
     }
 
-    // ── 8. 终极指令注入系统 (兼容 QR 按钮与各种发送方式) ──
-    function registerSlashCommand() {
-        if (window.SlashCommandParser && window.SlashCommand) {
-            try {
-                // 兼容 1.11+ 版本的现代指令注册方式
-                if (typeof window.SlashCommand.fromProps === 'function') {
-                    window.SlashCommandParser.addCommandObject(window.SlashCommand.fromProps({
-                        name: 'phone',
-                        callback: () => { window.__pmOpen(); return ''; },
-                        returns: 'void',
-                        helpString: '打开手机短信模式'
-                    }));
-                } else {
-                    // 旧版本兼容方式
-                    window.SlashCommandParser.addCommandObject(
-                        window.SlashCommandParser.registerCommand('phone', () => { window.__pmOpen(); return ''; }, [], '打开手机', true, true)
-                    );
-                }
-                console.log("[Phone Mode] Slash command registered successfully!");
-            } catch (err) {
-                console.error("[Phone Mode] Failed to register slash command:", err);
-            }
-        } else {
-            // 如果酒馆内核还没加载完毕，延时 1 秒再试
-            setTimeout(registerSlashCommand, 1000);
-        }
-    }
-    
-    // 启动轮询注册
-    registerSlashCommand();
-
-    // 保底键盘监听
     document.addEventListener('keydown', e => {
         if(e.key === 'Enter' && !e.shiftKey) {
             const ta = document.getElementById('send_textarea');
@@ -312,4 +282,13 @@
         }
     }, true);
 
+    if (typeof window.SlashCommandParser !== 'undefined' && window.SlashCommandParser.addCommandObject) {
+        try {
+            window.SlashCommandParser.addCommandObject(
+                window.SlashCommandParser.registerCommand('phone', () => { window.__pmOpen(); return ''; }, [], 'Open Phone', true, true)
+            );
+        } catch(err) {}
+    }
+
+    console.log("iPhone SMS V18 (UI Details Polished) Loaded.");
 })();
