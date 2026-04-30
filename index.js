@@ -1,270 +1,240 @@
 (async function () {
-    await new Promise(r => setTimeout(r, 2000));
+    await new Promise(r => setTimeout(r, 1500));
 
-    // ── 1. 全局持久化与状态 ──
+    // ── 1. 状态中心 ──
     window.__pmHistories = window.__pmHistories || {};
     let phoneActive = false;
     let phoneWindow = null;
     let conversationHistory = [];
     let currentPersona = '';
     let isGenerating = false;
-    let minimized = false;
+    let isMinimized = false;
 
-    // 事件监听：切换存档自动挂断
-    if (!window.__pmEventHooked && typeof eventSource !== 'undefined') {
-        eventSource.on('chat_changed', () => { if (phoneActive) window.__pmEnd(false); });
-        eventSource.on('character_page_loaded', () => { if (phoneActive) window.__pmEnd(false); });
-        window.__pmEventHooked = true;
-    }
+    const ctx = () => typeof SillyTavern !== 'undefined' ? SillyTavern.getContext() : null;
 
-    // ── 2. 逻辑工具 ──
     function getCurrentChatId() {
-        const ctx = SillyTavern.getContext();
-        return `${ctx.characterId}_${ctx.chat_file || 'default'}`;
+        const c = ctx();
+        return c ? `${c.characterId}_${c.chat_file || 'default'}` : 'global_chat';
     }
 
-    function getBaseCharName() {
-        const ctx = SillyTavern.getContext();
-        return ctx.characters?.[ctx.characterId]?.name ?? '未知角色';
+    function saveToStore() {
+        const id = getCurrentChatId();
+        if (!window.__pmHistories[id]) window.__pmHistories[id] = {};
+        window.__pmHistories[id][currentPersona] = [...conversationHistory.slice(-20)];
     }
 
-    function saveConversation() {
-        if (conversationHistory.length > 30) conversationHistory = conversationHistory.slice(-30);
-        const chatId = getCurrentChatId();
-        if (!window.__pmHistories[chatId]) window.__pmHistories[chatId] = {};
-        window.__pmHistories[chatId][currentPersona] = [...conversationHistory];
-    }
-
-    // 强效文本清理：物理截断 + 规则过滤
-    function superClean(text) {
+    // ── 2. 强效清理与截断 ──
+    function rigidClean(text) {
         let clean = (text ?? '')
-            .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '') // 删掉思维链
-            .replace(/<[^>]+>/g, '') // 删掉HTML
-            .replace(/\*[^*]+\*/g, '') // 删掉 *动作描写*
-            .replace(/\([^\)]+\)/g, '') // 删掉 (旁白)
-            .replace(/（[^）]+）/g, '') // 删掉 （中文括号旁白）
-            .replace(/当前风格[：:].*?(\n|$)/gi, '') // 删掉残留风格提示
-            .replace(/^(.*?):/gm, '') // 删掉名字前缀
+            .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '') 
+            .replace(/\*[^*]+\*/g, '') // 删动作
+            .replace(/[（(][^）)]+[）)]/g, '') // 删括号旁白
+            .replace(/当前风格[：:].*/gi, '')
+            .replace(/[\n\r]+/g, ' ') // 短信不需要换行，合并为单行
             .trim();
         
-        // 物理截断：只取前8句
-        const sentences = clean.split(/(?<=[。！？!?\n])\s*/).filter(s => s.length > 1);
-        return sentences.slice(0, 8).join('\n');
+        // 强行分句并只取前 6 句（留两句Buffer空间）
+        const sentences = clean.split(/(?<=[。！？!?])\s*/).filter(s => s.length > 1);
+        return sentences.length > 0 ? sentences.slice(0, 8).join(' ') : clean;
     }
 
-    // ── 3. API 调用（核心：人设注入） ──
-    async function getAIReply(userMessage) {
-        const ctx = SillyTavern.getContext();
-        conversationHistory.push({ role: 'user', content: userMessage });
-        saveConversation();
+    // ── 3. 核心 API 调用 ──
+    async function fetchReply(userMsg) {
+        const c = ctx();
+        conversationHistory.push({ role: 'user', content: userMsg });
+        
+        const historyContext = conversationHistory.slice(-5).map(m => 
+            `${m.role === 'user' ? 'Me' : currentPersona}: ${m.content}`).join('\n');
+
+        // 极其强硬的指令，放在首部
+        const prompt = `[IMPORTANT: ACT AS ${currentPersona} IN SMS MODE]
+[CONSTRAINT: USE {{user}} INFO & {{persona}} PERSONALITY]
+[RULES: NO ACTIONS, NO THOUGHTS, ONLY PLAIN TEXT. LENGTH: 3-8 SENTENCES.]
+[EXAMPLE: "Hi! I just saw your message. Are you free tonight? I found a great place."]
+
+Current Chat History:
+${historyContext}
+
+Reply to: "${userMsg}"
+${currentPersona}:`;
 
         try {
-            const historyText = conversationHistory.slice(0, -1).map(m => 
-                `${m.role === 'user' ? 'Me' : currentPersona}: ${m.content}`).join('\n');
-
-            // 构造包含人设变量的最高权限Prompt
-            const systemPrompt = `### [INTERNAL MODAL: IPHONE SMS MODE] ###
-- You are now strictly acting as "${currentPersona}".
-- Context: Reading User Persona ({{user}}) and Character Persona ({{persona}}).
-- Goal: Send a short text message. 
-- Rules: 
-  1. NO actions, NO thoughts, NO asterisks.
-  2. Length: 3 to 8 short sentences. 
-  3. Format: Pure text only.
-  4. NEVER say "Current Style" or metadata.`;
-
-            const fullPrompt = `${systemPrompt}\n\n[History]\n${historyText}\n\n[New Message from {{user}}]\n{{user}}: ${userMessage}\n\n[Response as ${currentPersona}]`;
-
-            let reply = await ctx.generateQuietPrompt(fullPrompt, false, false, systemPrompt, currentPersona);
-            const finalReply = superClean(reply);
-            
-            conversationHistory.push({ role: 'assistant', content: finalReply });
-            saveConversation();
-            return finalReply;
+            let res = await c.generateQuietPrompt(prompt, false, false);
+            let final = rigidClean(res);
+            conversationHistory.push({ role: 'assistant', content: final });
+            saveToStore();
+            return final;
         } catch (e) {
-            console.error('[Phone] Error:', e);
-            return "Connection Lost...";
+            return "Message failed to send. Check signal.";
         }
     }
 
-    // ── 4. UI 组件 ──
-    function appendBubble(text, side) {
-        const div = phoneWindow?.querySelector('.pm-messages');
-        if (!div || !text) return;
+    // ── 4. UI 渲染 ──
+    function renderMsg(text, side) {
+        const box = phoneWindow?.querySelector('.pm-msg-list');
+        if (!box) return;
         const b = document.createElement('div');
         b.className = `pm-bubble pm-${side}`;
-        b.innerHTML = text.replace(/\n/g, '<br>');
-        div.appendChild(b);
-        div.scrollTop = div.scrollHeight;
+        b.textContent = text;
+        box.appendChild(b);
+        box.scrollTop = box.scrollHeight;
     }
 
-    window.__pmConfirmPersona = function() {
-        const input = document.getElementById('pm-persona-input');
-        const newName = input.value.trim();
-        if (!newName) return;
-        
-        const chatId = getCurrentChatId();
-        if (!window.__pmHistories[chatId]) window.__pmHistories[chatId] = {};
-        if (Object.keys(window.__pmHistories[chatId]).length >= 10 && !window.__pmHistories[chatId][newName]) {
-            toastr.error('联系人列表已满(10人)'); return;
-        }
-        
-        document.getElementById('pm-modal-overlay').remove();
-        currentPersona = newName;
-        conversationHistory = window.__pmHistories[chatId][currentPersona] || [];
+    window.__pmSwitch = (name) => {
+        const id = getCurrentChatId();
+        currentPersona = name;
+        conversationHistory = window.__pmHistories[id]?.[name] || [];
         if (phoneWindow) {
-            phoneWindow.querySelector('.pm-char-name').textContent = currentPersona;
-            phoneWindow.querySelector('.pm-avatar').textContent = currentPersona[0];
-            const msgDiv = phoneWindow.querySelector('.pm-messages');
-            msgDiv.innerHTML = '';
-            conversationHistory.forEach(m => appendBubble(m.content, m.role === 'user' ? 'right' : 'left'));
+            phoneWindow.querySelector('.pm-name').textContent = name;
+            const list = phoneWindow.querySelector('.pm-msg-list');
+            list.innerHTML = '';
+            conversationHistory.forEach(m => renderMsg(m.content, m.role === 'user' ? 'right' : 'left'));
+        }
+        document.getElementById('pm-overlay')?.remove();
+    };
+
+    window.__pmDelete = (name) => {
+        const id = getCurrentChatId();
+        if (confirm(`删除与 ${name} 的联系？`)) {
+            delete window.__pmHistories[id][name];
+            __pmShowManager();
         }
     };
 
-    window.__pmSend = async function() {
-        if (isGenerating) return;
-        const input = phoneWindow.querySelector('.pm-input');
-        const text = input.value.trim();
-        if (!text) return;
-        input.value = '';
-
-        appendBubble(text, 'right');
-        isGenerating = true;
-        phoneWindow.querySelector('.pm-send-btn').style.opacity = '0.5';
-
-        const reply = await getAIReply(text);
-        
-        // 模拟打字间隔显示气泡
-        const sents = reply.split('\n');
-        for (let s of sents) {
-            await new Promise(r => setTimeout(r, 400));
-            appendBubble(s, 'left');
-        }
-
-        isGenerating = false;
-        phoneWindow.querySelector('.pm-send-btn').style.opacity = '1';
-    };
-
-    // ── 5. 样式（iPhone 视觉重塑） ──
-    const style = `
-#pm-phone-window {
-    position: fixed; bottom: 50px; right: 30px; width: 360px; height: 600px;
-    background: rgba(242, 242, 247, 0.85); backdrop-filter: blur(20px);
-    border: 8px solid #1c1c1e; border-radius: 45px; z-index: 99999;
-    display: flex; flex-direction: column; box-shadow: 0 25px 50px rgba(0,0,0,0.4);
-    font-family: -apple-system, system-ui, sans-serif; transition: 0.3s cubic-bezier(0.2, 0, 0.2, 1);
-}
-#pm-phone-window.pm-minimized { height: 100px; width: 200px; transform: translateY(400px); }
-
-/* 灵动岛 */
-.pm-dynamic-island {
-    width: 110px; height: 28px; background: #000; margin: 12px auto;
-    border-radius: 20px; flex-shrink: 0;
-}
-
-.pm-header { padding: 0 20px 10px; display: flex; align-items: center; justify-content: space-between; border-bottom: 0.5px solid #ccc; }
-.pm-avatar { width: 40px; height: 40px; border-radius: 50%; background: #007aff; color: #fff; display: flex; align-items: center; justify-content: center; font-weight: bold; margin-right: 10px; }
-.pm-char-name { font-size: 17px; font-weight: 600; flex: 1; }
-
-.pm-messages { flex: 1; overflow-y: auto; padding: 15px; display: flex; flex-direction: column; gap: 8px; }
-.pm-bubble { max-width: 75%; padding: 10px 16px; border-radius: 18px; font-size: 15px; line-height: 1.4; word-wrap: break-word; }
-.pm-right { align-self: flex-end; background: #007aff; color: #fff; border-bottom-right-radius: 4px; }
-.pm-left { align-self: flex-start; background: #e9e9eb; color: #000; border-bottom-left-radius: 4px; }
-
-.pm-input-area { background: #fff; padding: 10px 15px 30px; border-top: 0.5px solid #ccc; display: flex; gap: 10px; align-items: center; }
-.pm-input { 
-    flex: 1; background: #fff !important; color: #000 !important; border: 1px solid #ddd; 
-    border-radius: 20px; padding: 10px 15px; outline: none; transition: 0.2s;
-}
-.pm-input:focus { border-color: #007aff; box-shadow: 0 0 5px rgba(0,122,255,0.3); }
-.pm-send-btn { width: 32px; height: 32px; border-radius: 50%; background: #007aff; color: #fff; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 18px; }
-
-.pm-picker-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 100001; display: flex; align-items: center; justify-content: center; }
-.pm-picker-box { background: #fff; border-radius: 20px; width: 300px; padding: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.2); }
-    `;
-
-    // ── 6. 初始化 ──
-    if (!document.getElementById('pm-v4-style')) {
-        const s = document.createElement('style'); s.id = 'pm-v4-style'; s.innerHTML = style; document.head.appendChild(s);
-    }
-
-    window.__pmEnd = (t) => { phoneWindow?.remove(); phoneActive = false; if(t) toastr.info('iPhone mode Off'); };
-    window.__pmToggle = () => { minimized = !minimized; phoneWindow.classList.toggle('pm-minimized', minimized); };
-    window.__pmCallNew = () => {
-        const ov = document.createElement('div'); ov.id = 'pm-modal-overlay'; ov.className = 'pm-picker-overlay';
-        ov.innerHTML = `<div class="pm-picker-box">
-            <h3 style="margin-top:0">新联系人</h3>
-            <input id="pm-persona-input" class="pm-input" style="width:100%;margin-bottom:15px" placeholder="输入名字..." />
-            <div style="display:flex;gap:10px">
-                <button class="pm-send-btn" style="flex:1;border-radius:10px;background:#8e8e93" onclick="document.getElementById('pm-modal-overlay').remove()">取消</button>
-                <button class="pm-send-btn" style="flex:1;border-radius:10px" onclick="__pmConfirmPersona()">确认</button>
+    window.__pmShowManager = () => {
+        document.getElementById('pm-overlay')?.remove();
+        const id = getCurrentChatId();
+        const list = Object.keys(window.__pmHistories[id] || {});
+        const ov = document.createElement('div');
+        ov.id = 'pm-overlay';
+        ov.innerHTML = `
+            <div class="pm-modal">
+                <div style="font-weight:bold;margin-bottom:15px;display:flex;justify-content:space-between">
+                    <span>联系人管理 (${list.length}/10)</span>
+                    <span style="cursor:pointer" onclick="this.parentElement.parentElement.parentElement.remove()">✕</span>
+                </div>
+                <div style="max-height:200px;overflow-y:auto">
+                    ${list.map(n => `
+                        <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #eee">
+                            <span onclick="__pmSwitch('${n}')" style="cursor:pointer;color:#007aff">${n}</span>
+                            <span onclick="__pmDelete('${n}')" style="cursor:pointer;color:red">删除</span>
+                        </div>
+                    `).join('')}
+                </div>
+                <input id="pm-new-name" placeholder="添加新角色..." style="width:100%;margin-top:15px;padding:8px;box-sizing:border-box;border:1px solid #ddd;border-radius:8px">
+                <button onclick="__pmSwitch(document.getElementById('pm-new-name').value)" style="width:100%;margin-top:10px;padding:8px;background:#007aff;color:#fff;border:none;border-radius:8px">呼叫</button>
             </div>
-        </div>`;
+        `;
         document.body.appendChild(ov);
     };
 
-    window.__pmStart = () => {
+    window.__pmToggleMin = () => {
+        isMinimized = !isMinimized;
+        phoneWindow.classList.toggle('minimized', isMinimized);
+    };
+
+    window.__pmSendMsg = async () => {
+        if (isGenerating) return;
+        const input = phoneWindow.querySelector('.pm-input');
+        const val = input.value.trim();
+        if (!val) return;
+        input.value = '';
+
+        renderMsg(val, 'right');
+        isGenerating = true;
+        const dots = document.createElement('div');
+        dots.className = 'pm-bubble pm-left';
+        dots.textContent = '...';
+        phoneWindow.querySelector('.pm-msg-list').appendChild(dots);
+
+        const reply = await fetchReply(val);
+        dots.remove();
+        renderMsg(reply, 'left');
+        isGenerating = false;
+    };
+
+    // ── 5. 样式 ──
+    const css = `
+        #pm-phone {
+            position: fixed; bottom: 30px; right: 30px; width: 340px; height: 580px;
+            background: #ffffff; border: 10px solid #000; border-radius: 40px;
+            z-index: 100000; display: flex; flex-direction: column; 
+            box-shadow: 0 20px 40px rgba(0,0,0,0.3); transition: 0.4s cubic-bezier(0.18, 0.89, 0.32, 1.28);
+        }
+        #pm-phone.minimized { height: 40px; width: 120px; border-radius: 20px; overflow: hidden; transform: translateY(20px); }
+        .pm-island { width: 100px; height: 25px; background: #000; margin: 10px auto 5px; border-radius: 15px; cursor: pointer; flex-shrink: 0; }
+        .pm-bar { padding: 5px 15px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #f0f0f0; }
+        .pm-name { font-weight: 600; font-size: 16px; color: #000; }
+        .pm-msg-list { flex: 1; overflow-y: auto; padding: 15px; background: #fff; display: flex; flex-direction: column; gap: 10px; }
+        .pm-bubble { max-width: 80%; padding: 10px 14px; border-radius: 18px; font-size: 14px; line-height: 1.4; word-wrap: break-word; }
+        .pm-right { align-self: flex-end; background: #007aff; color: #fff; border-bottom-right-radius: 4px; }
+        .pm-left { align-self: flex-start; background: #e9e9eb; color: #000; border-bottom-left-radius: 4px; }
+        .pm-input-bar { padding: 10px 15px 25px; background: #fff; border-top: 1px solid #f0f0f0; display: flex; gap: 8px; }
+        .pm-input { flex: 1; border: 1px solid #ddd; background:#fff !important; color:#000 !important; border-radius: 20px; padding: 8px 15px; outline: none; font-size: 14px; }
+        #pm-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 100001; display: flex; align-items: center; justify-content: center; }
+        .pm-modal { background: #fff; padding: 20px; border-radius: 20px; width: 280px; box-shadow: 0 10px 20px rgba(0,0,0,0.2); font-family: sans-serif; }
+    `;
+
+    // ── 6. 启动 ──
+    window.__pmOpen = () => {
         if (phoneActive) return;
-        currentPersona = getBaseCharName();
-        const chatId = getCurrentChatId();
-        conversationHistory = window.__pmHistories[chatId]?.[currentPersona] || [];
-        
+        const c = ctx();
+        currentPersona = c?.characters?.[c.characterId]?.name ?? 'AI';
+        const id = getCurrentChatId();
+        if (!window.__pmHistories[id]) window.__pmHistories[id] = {};
+        conversationHistory = window.__pmHistories[id][currentPersona] || [];
+
         phoneWindow = document.createElement('div');
-        phoneWindow.id = 'pm-phone-window';
+        phoneWindow.id = 'pm-phone';
         phoneWindow.innerHTML = `
-            <div class="pm-dynamic-island"></div>
-            <div class="pm-header">
-                <div class="pm-avatar">${currentPersona[0]}</div>
-                <div class="pm-char-name">${currentPersona}</div>
-                <div style="display:flex;gap:8px">
-                    <button style="background:none;border:none;cursor:pointer;font-size:18px" onclick="__pmCallNew()">⇄</button>
-                    <button style="background:none;border:none;cursor:pointer;font-size:18px" onclick="__pmToggle()">─</button>
-                    <button style="background:none;border:none;cursor:pointer;font-size:18px;color:#ff3b30" onclick="__pmEnd(true)">✕</button>
-                </div>
+            <div class="pm-island" onclick="__pmToggleMin()"></div>
+            <div class="pm-bar">
+                <button onclick="__pmShowManager()" style="background:none;border:none;font-size:20px;cursor:pointer">≡</button>
+                <div class="pm-name">${currentPersona}</div>
+                <button onclick="window.__pmEnd()" style="background:none;border:none;color:red;cursor:pointer">✕</button>
             </div>
-            <div class="pm-messages"></div>
-            <div class="pm-input-area">
-                <textarea class="pm-input" rows="1" placeholder="iMessage"></textarea>
-                <button class="pm-send-btn" onclick="__pmSend()">↑</button>
+            <div class="pm-msg-list"></div>
+            <div class="pm-input-bar">
+                <input class="pm-input" placeholder="iMessage">
+                <button onclick="__pmSendMsg()" style="background:#007aff;color:#fff;border:none;width:30px;height:30px;border-radius:50%;cursor:pointer">↑</button>
             </div>
         `;
         document.body.appendChild(phoneWindow);
         phoneActive = true;
         
-        const msgDiv = phoneWindow.querySelector('.pm-messages');
-        conversationHistory.forEach(m => appendBubble(m.content, m.role === 'user' ? 'right' : 'left'));
-        
-        // 绑定Enter发送
-        phoneWindow.querySelector('.pm-input').addEventListener('keydown', e => {
-            if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); __pmSend(); }
-        });
-        
-        // 拖拽逻辑保持...
-        let isDragging = false, startX, startY, startLeft, startTop;
-        const header = phoneWindow.querySelector('.pm-header');
-        header.onmousedown = (e) => {
-            isDragging = true;
-            startX = e.clientX; startY = e.clientY;
-            startLeft = phoneWindow.offsetLeft; startTop = phoneWindow.offsetTop;
+        const list = phoneWindow.querySelector('.pm-msg-list');
+        conversationHistory.forEach(m => renderMsg(m.content, m.role === 'user' ? 'right' : 'left'));
+
+        phoneWindow.querySelector('.pm-input').onkeydown = e => { if(e.key==='Enter') __pmSendMsg(); };
+
+        // 简易稳定拖拽
+        let isDrag = false, ox, oy;
+        phoneWindow.querySelector('.pm-bar').onmousedown = e => {
+            isDrag = true; ox = e.clientX - phoneWindow.offsetLeft; oy = e.clientY - phoneWindow.offsetTop;
         };
-        document.onmousemove = (e) => {
-            if(!isDragging) return;
-            phoneWindow.style.left = (startLeft + e.clientX - startX) + 'px';
-            phoneWindow.style.top = (startTop + e.clientY - startY) + 'px';
-            phoneWindow.style.right = 'auto'; phoneWindow.style.bottom = 'auto';
+        document.onmousemove = e => {
+            if (!isDrag) return;
+            phoneWindow.style.left = (e.clientX - ox) + 'px';
+            phoneWindow.style.top = (e.clientY - oy) + 'px';
+            phoneWindow.style.bottom = 'auto'; phoneWindow.style.right = 'auto';
         };
-        document.onmouseup = () => isDragging = false;
+        document.onmouseup = () => isDrag = false;
     };
 
-    // 拦截命令行
+    window.__pmEnd = () => { phoneWindow?.remove(); phoneActive = false; };
+
+    if (!document.getElementById('pm-css')) {
+        const s = document.createElement('style'); s.id = 'pm-css'; s.innerHTML = css; document.head.appendChild(s);
+    }
+
     document.addEventListener('keydown', e => {
-        if(e.key==='Enter' && !e.shiftKey){
+        if (e.key === 'Enter' && !e.shiftKey) {
             const ta = document.getElementById('send_textarea');
-            if(ta && ta.value.trim()==='/phone'){
-                e.preventDefault(); ta.value=''; __pmStart();
+            if (ta && ta.value.trim() === '/phone') {
+                e.preventDefault(); ta.value = ''; __pmOpen();
             }
         }
     }, true);
 
-    console.log("iPhone Mode V4 Loaded. Use /phone to call.");
+    console.log("iPhone SMS V5 Loaded. Type /phone to start.");
 })();
