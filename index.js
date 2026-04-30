@@ -46,45 +46,7 @@
         handle.addEventListener('touchstart', onStart, { passive: false }); window.addEventListener('touchmove', onMove, { passive: false }); window.addEventListener('touchend', onEnd);
     }
 
-    // ── 3. 核心大换血：正向提取引擎 ──
-    function processResponse(text) {
-        if (!text) return ["..."];
-        let clean = text;
-
-        // 【最强阳谋】：只抓取 <SMS> 和 </SMS> 之间的内容，其他几千字正文直接抛弃！
-        const smsMatch = clean.match(/<SMS>([\s\S]*?)<\/SMS>/i);
-        if (smsMatch) {
-            clean = smsMatch[1]; 
-        } else {
-            // 保底机制：如果它忘了写 <SMS> 标签，启动 V18.1 的暴力清理法
-            clean = clean.replace(/<[^>]+>[\s\S]*?(<\/[^>]+>|$)/g, '');
-            clean = clean.replace(/\[[A-Za-z0-9_]+\]/g, '');
-            clean = clean.replace(/【[^】]+】[\s\S]*?(?=\/|$)/g, '');
-        }
-
-        // 基础净化，防止标签内还有动作描写
-        clean = clean.replace(/&lt;/g, '<').replace(/&gt;/g, '>');
-        clean = clean.replace(/\*[^*]+\*/g, '');
-        clean = clean.replace(/[\(（](?!\s*(转账|图片|系统))[^\)）]+[\)\）]/g, '');
-        clean = clean.replace(/^.{0,15}(:|：)\s*/, '');
-        clean = clean.trim();
-
-        // 强行丢弃乱入的标题行
-        let lines = clean.split('\n').map(l => l.trim()).filter(Boolean);
-        if (lines.length > 1 && !lines[0].includes('/') && lines[0].length < 15 && !lines[0].match(/(图片|转账)/)) {
-            lines.shift(); 
-        }
-        clean = lines.join(' ').trim();
-
-        // 气泡切分
-        let chunks = clean.split(/[/／]/).map(s => s.trim()).filter(s => s.length > 0);
-        if (chunks.length === 1 && clean.length > 20) {
-            chunks = clean.split(/(?<=[。！？!?\n])\s*/).map(s => s.trim()).filter(s => s.length > 0);
-        }
-        return chunks.slice(0, 8);
-    }
-
-    // ── 4. 渲染气泡 ──
+    // ── 3. 气泡渲染 ──
     function createBubbleElement(text, side) {
         const b = document.createElement('div');
         b.className = `pm-bubble pm-${side}`;
@@ -108,40 +70,98 @@
         return b;
     }
 
-    // ── 5. API 调用 (诱导其使用 SMS 标签) ──
+    // ── 4. API 调用 (极简超速发包 + 世界书提取) ──
     async function fetchSMS(userMsg) {
         const c = getCtx();
         conversationHistory.push({ role: 'user', content: userMsg });
 
-        const activeCharName = c.characters && c.characters[c.characterId] ? c.characters[c.characterId].name : '';
-        let personaContext = "";
-        if (currentPersona === activeCharName) {
-            personaContext = `(Load profile: {{persona}}).`;
-        } else {
-            personaContext = `(You are an NPC named ${currentPersona}).`;
+        // 1. 提取角色信息 (严格限长，提速)
+        const char = c.characters && c.characters[c.characterId] ? c.characters[c.characterId] : {};
+        const isMainChar = currentPersona === (char.name || '');
+        let cardDesc = char.description || '';
+        let cardPersonality = char.personality || '';
+        if (cardDesc.length > 600) cardDesc = cardDesc.substring(0, 600) + '...';
+        if (cardPersonality.length > 200) cardPersonality = cardPersonality.substring(0, 200) + '...';
+
+        // 2. 提取世界书 (只取前 5 条核心词条，防过载)
+        let worldBookText = '';
+        try {
+            if (c.worldInfo) {
+                worldBookText = Object.values(c.worldInfo)
+                    .filter(e => e && e.content)
+                    .map(e => e.content)
+                    .slice(0, 5)
+                    .join('\n');
+                if (worldBookText.length > 500) worldBookText = worldBookText.substring(0, 500) + '...';
+            }
+        } catch (err) {}
+
+        // 3. 提取主线剧情 (压缩至 8 条，提速)
+        let mainChatContext = "无";
+        if (Array.isArray(c.chat) && c.chat.length > 0) {
+            const recentMainChat = c.chat.slice(-8);
+            mainChatContext = recentMainChat.map(m => `${m.is_user ? 'User' : m.name}: ${m.mes.replace(/<[^>]+>/g, '').substring(0, 100)}`).join('\n');
         }
 
-        const systemPrompt = `[SYSTEM: SMS EXTRACTION MODE]
-Role: "${currentPersona}". ${personaContext}
+        const phoneHistoryStr = conversationHistory.slice(-8).map(m => m.role === 'user' ? `User: ${m.content}` : `${currentPersona}: ${m.content}`).join('\n');
+        
+        // 4. 极简版短信专属 Prompt
+        const isolatedPrompt = `[SYSTEM: SMS CHAT MODE]
+Role: ${currentPersona}
+${isMainChar ? `Traits: ${cardDesc}\nPersonality: ${cardPersonality}\n` : ''}${worldBookText ? `Worldbook: ${worldBookText}\n` : ''}
+[STORY CONTEXT]
+${mainChatContext}
 
-You are currently replying to {{user}}'s text messages.
-You MUST put the actual text messages INSIDE <SMS> and </SMS> tags!
-Inside the <SMS> tags, NO narration, NO headers, ONLY pure text.
-Separate multiple messages with a "/".
+[RULES]
+1. You are texting on a smartphone. NO long narratives.
+2. NO novel formatting, NO A/B/C/D options, NO status bars, NO XML tags like <thinking>.
+3. Write ONLY your text messages INSIDE <SMS> and </SMS> tags!
+4. Keep it to 2-6 short sentences, separated by "/".
+5. Send images using (图片: description).
 
-Correct Output Example:
-<novel_header>Some text</novel_header>
-<thinking>I should reply fast.</thinking>
-<SMS>我刚下班 / 你在干嘛呢？ / (图片: 路边的小猫)</SMS>`;
+[PHONE CHAT]
+${phoneHistoryStr}
 
-        const historyStr = conversationHistory.slice(-6).map(m => m.role === 'user' ? `{{user}}: ${m.content}` : `${currentPersona}: ${m.content}`).join('\n');
-        const prompt = `${systemPrompt}\n\n[History]\n${historyStr}\n\n{{user}}: ${userMsg}\n${currentPersona} Output:`;
+User: ${userMsg}
+${currentPersona}:`;
 
         try {
-            let raw = await c.generateQuietPrompt(prompt, false, false);
-            let sentences = processResponse(raw);
-            
-            if (sentences.length === 0) sentences = ['（对方没有回复）'];
+            let raw = '';
+            if (typeof c.generateRaw === 'function') {
+                raw = await c.generateRaw([{ role: 'user', content: isolatedPrompt }], '', false, false);
+            } else {
+                raw = await c.generateQuietPrompt(isolatedPrompt, false, false);
+            }
+
+            let clean = typeof raw === 'string' ? raw : (raw?.choices?.[0]?.message?.content || String(raw));
+
+            // 提取 <SMS> 内容
+            const smsMatch = clean.match(/<SMS>([\s\S]*?)<\/SMS>/i);
+            if (smsMatch) {
+                clean = smsMatch[1];
+            } else {
+                // 选项与乱码铡刀
+                clean = clean.replace(/(?:^|\n)\s*A[、\.\:][\s\S]*/i, ''); 
+                clean = clean.replace(/(?:^|\n)\s*【[^】]+】[\s\S]*/i, ''); 
+                clean = clean.replace(/<[^>]*>[\s\S]*?(<\/[^>]*>|$)/g, ''); 
+            }
+
+            clean = clean.replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+            clean = clean.replace(/\*[^*]+\*/g, '');
+            clean = clean.replace(/[\(（](?!\s*(转账|图片|系统))[^\)）]+[\)\）]/g, '');
+            clean = clean.replace(/^.{0,15}(:|：)\s*/, '');
+            clean = clean.trim();
+
+            let lines = clean.split('\n').map(l => l.trim()).filter(Boolean);
+            if (lines.length > 1 && !lines[0].includes('/') && lines[0].length < 15 && !lines[0].match(/(图片|转账)/)) lines.shift(); 
+            clean = lines.join(' ').trim();
+
+            let sentences = clean.split(/[/／]/).map(s => s.trim()).filter(s => s.length > 0);
+            if (sentences.length === 1 && clean.length > 20) {
+                sentences = clean.split(/(?<=[。！？!?\n])\s*/).map(s => s.trim()).filter(s => s.length > 0);
+            }
+            sentences = sentences.slice(0, 8);
+            if (sentences.length === 0) sentences = ['...'];
 
             conversationHistory.push({ role: 'assistant', content: sentences.join(' / ') });
 
@@ -152,11 +172,11 @@ Correct Output Example:
 
             return sentences;
         } catch (e) {
-            return ['（发送超时，请重试）'];
+            return ['（发送失败，请重试）'];
         }
     }
 
-    // ── 6. UI 状态 (打字动画) ──
+    // ── 5. UI 与打字动画 ──
     function addBubble(text, side) {
         const list = phoneWindow?.querySelector('.pm-msg-list');
         if (!list) return;
@@ -177,7 +197,7 @@ Correct Output Example:
 
     function hideTyping() { document.getElementById('pm-typing')?.remove(); }
 
-    // ── 7. 发送逻辑 ──
+    // ── 6. 发送逻辑 ──
     window.__pmSend = async () => {
         if (isGenerating) return;
         const input = phoneWindow.querySelector('.pm-input');
@@ -207,7 +227,7 @@ Correct Output Example:
         input.focus();
     };
 
-    // ── 8. 联系人列表 ──
+    // ── 7. 联系人列表 ──
     window.__pmShowList = () => {
         document.getElementById('pm-overlay')?.remove();
         const c = getCtx();
@@ -283,7 +303,7 @@ Correct Output Example:
     window.__pmToggleMin = () => { isMinimized = !isMinimized; phoneWindow.classList.toggle('is-min', isMinimized); };
     window.__pmEnd = () => { phoneWindow?.remove(); phoneWindow = null; phoneActive = false; isMinimized = false; };
 
-    // ── 9. 初始化 UI ──
+    // ── 8. 初始化 UI ──
     window.__pmOpen = () => {
         if (phoneActive && phoneWindow) { phoneWindow.style.display = 'flex'; return; }
         try { window.__pmHistories = JSON.parse(localStorage.getItem('ST_SMS_DATA_V2')) || {}; } catch {}
@@ -292,7 +312,7 @@ Correct Output Example:
         const defaultChar = c?.characters?.[c.characterId]?.name ?? 'AI';
 
         phoneWindow = document.createElement('div');
-        phoneWindow.id = 'pm-iphone-v27';
+        phoneWindow.id = 'pm-iphone-v30';
         phoneWindow.innerHTML = `
 <div class="pm-island"></div>
 <div class="pm-main-ui">
@@ -319,14 +339,14 @@ Correct Output Example:
         window.__pmSwitch(defaultChar);
     };
 
-    // ── 10. CSS 样式 ──
-    if (!document.getElementById('pm-v27-css')) {
+    // ── 9. CSS 样式 ──
+    if (!document.getElementById('pm-v30-css')) {
         const s = document.createElement('style');
-        s.id = 'pm-v27-css';
+        s.id = 'pm-v30-css';
         s.textContent = `
-#pm-iphone-v27 { position: fixed; bottom: 40px; right: 40px; width: 330px; height: 580px; background: #fff; border: 10px solid #1a1a1a; border-radius: 45px; z-index: 100000; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 20px 60px rgba(0,0,0,0.45); transition: 0.35s cubic-bezier(0.18, 0.89, 0.32, 1.2); font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif; touch-action: none; min-width: 330px !important; max-width: 330px !important; min-height: 580px !important; max-height: 580px !important; box-sizing: border-box !important; }
-#pm-iphone-v27.is-min { height: 50px !important; min-height: 50px !important; max-height: 50px !important; width: 140px !important; min-width: 140px !important; max-width: 140px !important; border-radius: 25px; border-width: 6px; }
-#pm-iphone-v27.is-min .pm-main-ui { display: none !important; }
+#pm-iphone-v30 { position: fixed; bottom: 40px; right: 40px; width: 330px; height: 580px; background: #fff; border: 10px solid #1a1a1a; border-radius: 45px; z-index: 100000; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 20px 60px rgba(0,0,0,0.45); transition: 0.35s cubic-bezier(0.18, 0.89, 0.32, 1.2); font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif; touch-action: none; min-width: 330px !important; max-width: 330px !important; min-height: 580px !important; max-height: 580px !important; box-sizing: border-box !important; }
+#pm-iphone-v30.is-min { height: 50px !important; min-height: 50px !important; max-height: 50px !important; width: 140px !important; min-width: 140px !important; max-width: 140px !important; border-radius: 25px; border-width: 6px; }
+#pm-iphone-v30.is-min .pm-main-ui { display: none !important; }
 .pm-island { width: 100px; height: 26px; background: #1a1a1a; margin: 8px auto 4px; border-radius: 14px; cursor: move; flex-shrink: 0; touch-action: none; z-index: 10;}
 .pm-main-ui { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
 .pm-navbar { display: flex; align-items: center; justify-content: space-between; padding: 6px 14px; border-bottom: 1px solid #f0f0f0; flex-shrink: 0; }
@@ -371,7 +391,7 @@ Correct Output Example:
         document.head.appendChild(s);
     }
 
-    // ── 11. 指令引擎 ──
+    // ── 10. 指令引擎 ──
     function registerSlashCommand() {
         if (window.SlashCommandParser && window.SlashCommand) {
             try {
@@ -396,5 +416,5 @@ Correct Output Example:
         }
     }, true);
 
-    console.log("[Phone Mode] V27.1 (Positive Extraction) Loaded.");
+    console.log("[Phone Mode] V30 (Light-speed & Omniscient Edition) Loaded.");
 })();
