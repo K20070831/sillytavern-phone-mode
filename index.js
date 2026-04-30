@@ -70,7 +70,7 @@
         return b;
     }
 
-    // ── 4. API 调用 (回归最稳定的 QuietPrompt + 强力过滤) ──
+    // ── 4. API 调用 (格式剥离与记忆同步) ──
     async function fetchSMS(userMsg) {
         const c = getCtx();
         conversationHistory.push({ role: 'user', content: userMsg });
@@ -80,34 +80,48 @@
         if (currentPersona === activeCharName) {
             personaContext = `(Load character profile: {{persona}} & {{worldbook}}).`;
         } else {
-            personaContext = `(You are an NPC named ${currentPersona}. Generate personality based on {{worldbook}} and current context).`;
+            personaContext = `(You are an NPC named ${currentPersona}. Generate personality based on {{worldbook}}).`;
         }
 
-        const systemPrompt = `[SYSTEM: SMS_MODE OVERRIDE - CRITICAL PRIORITY] 
-1. YOU ARE: "${currentPersona}". ${personaContext}
-2. CANCEL ALL EXISTING PRESETS, ECoT, and NOVEL FORMATTING.
-3. ABSOLUTELY NO <novel_header>, NO <meow_FM>, NO <thinking>, NO [TAGS].
-4. Do NOT output any metadata, location tags, or narrative text.
-5. FORMAT: 3-8 short text messages separated by "/". PURE TEXT ONLY.
-6. Example: "I just woke up / Are you free today? / (图片: coffee)"`;
+        // 核心修复1：同步剧情记忆，但强行剥离小说格式
+        const systemPrompt = `[FORMAT SHIFT ONLY: RETAIN PLOT MEMORY] 
+You remember everything that just happened in the main story, but you are now switching to a PURE SMS INTERFACE. 
+Role: ${currentPersona}. ${personaContext}
 
-        // 构建带历史记录的平铺 Prompt (最兼容的格式)
+RULES:
+1. RETAIN story context, but STOP narrating. ONLY generate short text messages.
+2. ABSOLUTELY NO <thinking>, NO <novel_header>, NO <meow_FM>, NO [TAGS].
+3. NO NARRATION OR THOUGHTS. ONLY PURE TEXT.
+4. Separate sentences with "/".
+5. Examples: "I am here / Where are you? / (图片: cat)"`;
+
         const historyStr = conversationHistory.slice(-6).map(m => m.role === 'user' ? `{{user}}: ${m.content}` : `${currentPersona}: ${m.content}`).join('\n');
-        const prompt = `${systemPrompt}\n\n[History]\n${historyStr}\n\n{{user}}: ${userMsg}\n${currentPersona}:`;
+        const prompt = `${systemPrompt}\n\n[Phone Screen]\n${historyStr}\n\n{{user}}: ${userMsg}\n${currentPersona} (Typing SMS):`;
 
         try {
+            // QuietPrompt 会自动把主聊天记录带上，从而实现记忆同步
             let raw = await c.generateQuietPrompt(prompt, false, false);
-
-            // V18.1 的铜墙铁壁过滤器
             let clean = raw ?? '';
-            clean = clean.replace(new RegExp('<' + '!--[\\s\\S]*?--' + '>', 'g'), '');
-            clean = clean.replace(/<\s*(novel_header|meow_FM|thinking|thought)[\s\S]*?(<\s*\/|\n\s*<\s*\/|$)/gi, '');
-            clean = clean.replace(/<\s*([\w-]+)\s*>[\s\S]*?<\s*\/\s*\1\s*>/gi, '');
-            clean = clean.replace(/\[[A-Za-z0-9_]+\]/g, '');
-            clean = clean.replace(/\*[^*]+\*/g, '');
-            clean = clean.replace(/[\(（](?!\s*(转账|图片|系统))[^\)）]+[\)\）]/g, '');
-            clean = clean.replace(/^.{0,15}(:|：)\s*/, '');
-            clean = clean.replace(/<\/?[\w-]+\s*\/?>/g, '');
+
+            // 核心修复2：物理蒸发碎屑防线（即使 AI 想写标签，也会被这里直接切除）
+            const garbageWords = ['thinking>', 'thought>', 'novel_header>', 'meow_FM>', 'ECoT>', '<thinking', '<novel_header', '<meow_FM'];
+            garbageWords.forEach(word => {
+                clean = clean.replace(new RegExp(word, 'gi'), '');
+            });
+
+            // 常规深度清理
+            clean = clean.replace(/<[^>]*>[\s\S]*?(<\/[^>]*>|$)/g, ''); 
+            clean = clean.replace(/\[[A-Za-z0-9_]+\]/g, ''); 
+            clean = clean.replace(/\*[^*]+\*/g, ''); 
+            clean = clean.replace(/[\(（](?!\s*(转账|图片|系统))[^\)）]+[\)\）]/g, ''); 
+            clean = clean.replace(/^.{0,15}(:|：)\s*/, ''); 
+
+            // 首行异常标题切除
+            let lines = clean.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+            if (lines.length > 1 && !lines[0].includes('/') && lines[0].length < 15 && !lines[0].includes('图片') && !lines[0].includes('转账')) {
+                lines.shift(); 
+            }
+            clean = lines.join(' ');
             clean = clean.trim();
 
             let sentences = clean.split(/[/／]/).map(s => s.trim()).filter(s => s.length > 0);
@@ -130,7 +144,7 @@
         }
     }
 
-    // ── 5. 气泡与 UI 状态 (保留 Claude 的打字动画) ──
+    // ── 5. 气泡与 UI 状态 ──
     function addBubble(text, side) {
         const list = phoneWindow?.querySelector('.pm-msg-list');
         if (!list) return;
@@ -151,7 +165,7 @@
 
     function hideTyping() { document.getElementById('pm-typing')?.remove(); }
 
-    // ── 6. 发送逻辑 (带锁定) ──
+    // ── 6. 发送逻辑 ──
     window.__pmSend = async () => {
         if (isGenerating) return;
         const input = phoneWindow.querySelector('.pm-input');
@@ -181,7 +195,7 @@
         input.focus();
     };
 
-    // ── 7. 联系人列表 (移除头像的纯净版) ──
+    // ── 7. 联系人列表 ──
     window.__pmShowList = () => {
         document.getElementById('pm-overlay')?.remove();
         const c = getCtx();
@@ -266,7 +280,7 @@
         const defaultChar = c?.characters?.[c.characterId]?.name ?? 'AI';
 
         phoneWindow = document.createElement('div');
-        phoneWindow.id = 'pm-iphone-v21';
+        phoneWindow.id = 'pm-iphone-v24';
         phoneWindow.innerHTML = `
 <div class="pm-island"></div>
 <div class="pm-main-ui">
@@ -293,14 +307,14 @@
         window.__pmSwitch(defaultChar);
     };
 
-    // ── 9. CSS 样式 (极致打磨版) ──
-    if (!document.getElementById('pm-v21-css')) {
+    // ── 9. CSS 样式 ──
+    if (!document.getElementById('pm-v24-css')) {
         const s = document.createElement('style');
-        s.id = 'pm-v21-css';
+        s.id = 'pm-v24-css';
         s.textContent = `
-#pm-iphone-v21 { position: fixed; bottom: 40px; right: 40px; width: 330px; height: 580px; background: #fff; border: 10px solid #1a1a1a; border-radius: 45px; z-index: 100000; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 20px 60px rgba(0,0,0,0.45); transition: 0.35s cubic-bezier(0.18, 0.89, 0.32, 1.2); font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif; touch-action: none; min-width: 330px !important; max-width: 330px !important; min-height: 580px !important; max-height: 580px !important; box-sizing: border-box !important; }
-#pm-iphone-v21.is-min { height: 50px !important; min-height: 50px !important; max-height: 50px !important; width: 140px !important; min-width: 140px !important; max-width: 140px !important; border-radius: 25px; border-width: 6px; }
-#pm-iphone-v21.is-min .pm-main-ui { display: none !important; }
+#pm-iphone-v24 { position: fixed; bottom: 40px; right: 40px; width: 330px; height: 580px; background: #fff; border: 10px solid #1a1a1a; border-radius: 45px; z-index: 100000; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 20px 60px rgba(0,0,0,0.45); transition: 0.35s cubic-bezier(0.18, 0.89, 0.32, 1.2); font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif; touch-action: none; min-width: 330px !important; max-width: 330px !important; min-height: 580px !important; max-height: 580px !important; box-sizing: border-box !important; }
+#pm-iphone-v24.is-min { height: 50px !important; min-height: 50px !important; max-height: 50px !important; width: 140px !important; min-width: 140px !important; max-width: 140px !important; border-radius: 25px; border-width: 6px; }
+#pm-iphone-v24.is-min .pm-main-ui { display: none !important; }
 .pm-island { width: 100px; height: 26px; background: #1a1a1a; margin: 8px auto 4px; border-radius: 14px; cursor: move; flex-shrink: 0; touch-action: none; z-index: 10;}
 .pm-main-ui { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
 .pm-navbar { display: flex; align-items: center; justify-content: space-between; padding: 6px 14px; border-bottom: 1px solid #f0f0f0; flex-shrink: 0; }
@@ -345,7 +359,7 @@
         document.head.appendChild(s);
     }
 
-    // ── 10. 恢复双保险指令注册引擎 (防 QR 报错核心) ──
+    // ── 10. 指令引擎 ──
     function registerSlashCommand() {
         if (window.SlashCommandParser && window.SlashCommand) {
             try {
@@ -370,5 +384,5 @@
         }
     }, true);
 
-    console.log("[Phone Mode] V21 (Ultimate Fusion) Loaded.");
+    console.log("[Phone Mode] V24 (Plot Memory + Format Strip Edition) Loaded.");
 })();
