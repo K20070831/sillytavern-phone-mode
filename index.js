@@ -1,19 +1,17 @@
 (async function () {
-    // 等待 SillyTavern 初始化完成
-    await new Promise(r => setTimeout(r, 1000));
-
-    const ctx = SillyTavern.getContext();
-    const { eventSource, event_types, SlashCommandParser, SlashCommand } = ctx;
+    await new Promise(r => setTimeout(r, 2000));
 
     // ── 状态 ──────────────────────────────────────────
     let phoneActive = false;
     let phoneMesIndex = null;
-    
+
     // ── 工具函数 ──────────────────────────────────────
 
     function getCurrentCharName() {
-        const c = ctx.characters?.[ctx.characterId];
-        return c?.name ?? '未知';
+        try {
+            const ctx = SillyTavern.getContext();
+            return ctx.characters?.[ctx.characterId]?.name ?? '未知';
+        } catch { return '未知'; }
     }
 
     function splitUserParts(text) {
@@ -25,38 +23,37 @@
     }
 
     function escapeHtml(str) {
-        return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     }
 
     function renderBubbleContent(text) {
         const parts = [];
-        const specialRE = /[（(](转账|图片)[+\s：:]*([\d.]+|[^）)]+)[）)]/g;
+        const re = /[（(](转账|图片)[+\s：:]*([\d.]+|[^）)]+)[）)]/g;
         let last = 0, m;
-        while ((m = specialRE.exec(text)) !== null) {
+        while ((m = re.exec(text)) !== null) {
             if (m.index > last) parts.push({ type: 'text', value: text.slice(last, m.index) });
             if (m[1] === '转账') parts.push({ type: 'transfer', value: parseFloat(m[2]) || 0 });
             else parts.push({ type: 'image', value: m[2].trim() });
             last = m.index + m[0].length;
         }
         if (last < text.length) parts.push({ type: 'text', value: text.slice(last) });
-
         return parts.map(p => {
             if (p.type === 'transfer') return `<div class="pm-card pm-transfer">💸 转账 ¥${p.value.toFixed(2)}</div>`;
             if (p.type === 'image') return `<div class="pm-card pm-image">🖼️ ${escapeHtml(p.value)}</div>`;
-            const safe = escapeHtml(p.value).replace(/\n/g, '<br>');
+            const safe = escapeHtml(p.value).replace(/\n/g,'<br>');
             return safe ? `<span class="pm-text">${safe}</span>` : '';
         }).join('');
     }
 
     // ── DOM 操作 ──────────────────────────────────────
 
-    function getPhoneMessagesDiv() {
+    function getMessagesDiv() {
         if (phoneMesIndex === null) return null;
         return document.querySelector(`.mes[mesid="${phoneMesIndex}"] .pm-messages`);
     }
 
     function appendBubble(text, side) {
-        const div = getPhoneMessagesDiv();
+        const div = getMessagesDiv();
         if (!div) return;
         const b = document.createElement('div');
         b.className = `pm-bubble pm-${side}`;
@@ -65,8 +62,8 @@
         div.scrollTop = div.scrollHeight;
     }
 
-    function appendSystemNote(text) {
-        const div = getPhoneMessagesDiv();
+    function appendNote(text) {
+        const div = getMessagesDiv();
         if (!div) return;
         const n = document.createElement('div');
         n.className = 'pm-system-note';
@@ -77,31 +74,12 @@
 
     // ── 手机 UI ───────────────────────────────────────
 
-    function buildPhoneHTML(charName) {
-        return `
-<div class="pm-wrapper">
-  <div class="pm-header">
-    <span class="pm-char-name">${escapeHtml(charName)}</span>
-    <button class="pm-end-btn" onclick="window.__pmEnd()">结束通话</button>
-  </div>
-  <div class="pm-messages"></div>
-  <div class="pm-input-row">
-    <textarea class="pm-input" rows="2" placeholder="输入消息… 用 / 分隔多条（Enter发送，Shift+Enter换行）"></textarea>
-    <button class="pm-send-btn" onclick="window.__pmSend()">发送</button>
-  </div>
-</div>`;
-    }
-
-    // 全局函数供 onclick 调用
     window.__pmSend = function () {
-        const mesText = document.querySelector(`.mes[mesid="${phoneMesIndex}"] .mes_text`);
-        if (!mesText) return;
-        const input = mesText.querySelector('.pm-input');
+        const input = document.querySelector(`.mes[mesid="${phoneMesIndex}"] .pm-input`);
         const raw = input?.value?.trim();
         if (!raw) return;
         input.value = '';
         splitUserParts(raw).forEach(p => appendBubble(p, 'right'));
-        // 发送给 AI
         const ta = document.getElementById('send_textarea');
         const btn = document.getElementById('send_but');
         if (ta && btn) { ta.value = raw; btn.click(); }
@@ -111,83 +89,140 @@
         endPhoneMode(true);
     };
 
+    function buildPhoneHTML(charName) {
+        return `
+<div class="pm-wrapper">
+  <div class="pm-header">
+    <span class="pm-char-name">${escapeHtml(charName)}</span>
+    <button class="pm-end-btn" onclick="__pmEnd()">结束通话</button>
+  </div>
+  <div class="pm-messages"></div>
+  <div class="pm-input-row">
+    <textarea class="pm-input" rows="2" placeholder="输入消息…用 / 分隔多条（Enter发送，Shift+Enter换行）"></textarea>
+    <button class="pm-send-btn" onclick="__pmSend()">发送</button>
+  </div>
+</div>`;
+    }
+
     // ── 核心流程 ──────────────────────────────────────
 
     async function startPhoneMode() {
         if (phoneActive) { toastr.warning('手机模式已在运行中'); return; }
-
         const charName = getCurrentCharName();
 
-        // 构造一条 system 消息插入 chat 数组
-        const msg = {
-            name: 'System',
-            is_user: false,
-            is_system: true,
-            send_date: new Date().toISOString(),
-            mes: '📱 手机模式',
-            extra: {},
-        };
-        ctx.chat.push(msg);
-        phoneMesIndex = ctx.chat.length - 1;
+        // 找到聊天容器，直接插入一个 div
+        const chat = document.getElementById('chat');
+        if (!chat) { toastr.error('找不到聊天容器'); return; }
 
-        // 渲染这条消息
-        if (typeof window.addOneMessage === 'function') {
-            await window.addOneMessage(msg, { scroll: true, showSwipes: false });
-        } else {
-            await window.reloadCurrentChat?.();
-        }
-
-        await new Promise(r => setTimeout(r, 150));
-
-        const mesText = document.querySelector(`.mes[mesid="${phoneMesIndex}"] .mes_text`);
-        if (!mesText) { toastr.error('手机模式初始化失败，请重试'); return; }
-
+        const wrapper = document.createElement('div');
+        wrapper.className = 'mes';
+        wrapper.style.cssText = 'padding:8px;background:transparent;border:none;';
+        const mesText = document.createElement('div');
+        mesText.className = 'mes_text';
         mesText.innerHTML = buildPhoneHTML(charName);
+        wrapper.appendChild(mesText);
+        chat.appendChild(wrapper);
 
-        // Enter 键绑定
+        // 记录这个元素（不用 mesid，直接存引用）
+        window.__pmElement = wrapper;
+        phoneActive = true;
+
+        // 绑定 Enter 键
         const input = mesText.querySelector('.pm-input');
         input?.addEventListener('keydown', e => {
             if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); window.__pmSend(); }
         });
 
-        phoneActive = true;
-        toastr.success(`📱 手机模式已开启`);
+        // 滚动到底部
+        chat.scrollTop = chat.scrollHeight;
+        toastr.success('📱 手机模式已开启');
     }
+
+    // 覆盖 getMessagesDiv，改用直接引用
+    function getMessagesDivDirect() {
+        return window.__pmElement?.querySelector('.pm-messages') ?? null;
+    }
+
+    // 重新绑定 appendBubble 使用直接引用
+    window.__pmSend = function () {
+        const input = window.__pmElement?.querySelector('.pm-input');
+        const raw = input?.value?.trim();
+        if (!raw) return;
+        input.value = '';
+        const div = getMessagesDivDirect();
+        splitUserParts(raw).forEach(p => {
+            if (!div) return;
+            const b = document.createElement('div');
+            b.className = 'pm-bubble pm-right';
+            b.innerHTML = renderBubbleContent(p);
+            div.appendChild(b);
+            div.scrollTop = div.scrollHeight;
+        });
+        const ta = document.getElementById('send_textarea');
+        const btn = document.getElementById('send_but');
+        if (ta && btn) { ta.value = raw; btn.click(); }
+    };
+
+    window.__pmEnd = function () {
+        endPhoneMode(true);
+    };
 
     function endPhoneMode(showToast = true) {
         if (!phoneActive) return;
-        appendSystemNote('── 通话已结束 ──');
-        const mesText = document.querySelector(`.mes[mesid="${phoneMesIndex}"] .mes_text`);
-        if (mesText) {
-            mesText.querySelector('.pm-input')?.setAttribute('disabled', '');
-            mesText.querySelector('.pm-send-btn')?.setAttribute('disabled', '');
-            mesText.querySelector('.pm-end-btn')?.setAttribute('disabled', '');
+        const div = getMessagesDivDirect();
+        if (div) {
+            const n = document.createElement('div');
+            n.className = 'pm-system-note';
+            n.textContent = '── 通话已结束 ──';
+            div.appendChild(n);
         }
+        window.__pmElement?.querySelectorAll('.pm-input,.pm-send-btn,.pm-end-btn')
+            .forEach(el => el.setAttribute('disabled', ''));
         phoneActive = false;
-        phoneMesIndex = null;
+        window.__pmElement = null;
         if (showToast) toastr.info('手机模式已结束');
     }
 
-    // ── 事件监听 ──────────────────────────────────────
+    // ── 监听 AI 回复 ──────────────────────────────────
 
-    eventSource.on(event_types.MESSAGE_RECEIVED, (mesIndex) => {
+    const observer = new MutationObserver(() => {
         if (!phoneActive) return;
-        const msg = ctx.chat[mesIndex];
-        if (!msg || msg.is_user || msg.is_system) return;
-        splitAISentences(msg.mes || '').forEach(s => appendBubble(s, 'left'));
+        const messages = document.querySelectorAll('#chat .mes:not(.pm-phone-mes)');
+        const last = messages[messages.length - 1];
+        if (!last) return;
+        const isAI = !last.classList.contains('is_user') && last !== window.__pmElement;
+        if (!isAI) return;
+        // 防止重复处理
+        if (last.dataset.pmProcessed) return;
+        last.dataset.pmProcessed = 'true';
+        const text = last.querySelector('.mes_text')?.innerText?.trim();
+        if (!text) return;
+        const div = getMessagesDivDirect();
+        if (!div) return;
+        splitAISentences(text).forEach(s => {
+            const b = document.createElement('div');
+            b.className = 'pm-bubble pm-left';
+            b.innerHTML = renderBubbleContent(s);
+            div.appendChild(b);
+            div.scrollTop = div.scrollHeight;
+        });
     });
+    observer.observe(document.getElementById('chat') ?? document.body, { childList: true, subtree: true });
 
-    eventSource.on(event_types.CHAT_CHANGED, () => {
-        if (phoneActive) { endPhoneMode(false); toastr.info('角色已切换，手机模式自动结束'); }
-    });
+    // ── 拦截输入框的 /phone 命令 ──────────────────────
 
-    // ── 注册 /phone 命令 ───────────────────────────────
-
-    SlashCommandParser.addCommandObject(SlashCommand.fromProps({
-        name: 'phone',
-        helpString: '召唤手机聊天界面',
-        callback: async () => { await startPhoneMode(); return ''; },
-    }));
+    document.addEventListener('keydown', function (e) {
+        if (e.key !== 'Enter' || e.shiftKey) return;
+        const ta = document.getElementById('send_textarea');
+        if (!ta || document.activeElement !== ta) return;
+        const val = ta.value.trim();
+        if (val === '/phone') {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            ta.value = '';
+            startPhoneMode();
+        }
+    }, true);
 
     // ── 样式注入 ──────────────────────────────────────
 
@@ -217,5 +252,5 @@
         document.head.appendChild(s);
     }
 
-    console.log('[phone-mode] 加载完成，输入 /phone 召唤');
+    console.log('[phone-mode] 加载完成，在输入框输入 /phone 然后按 Enter');
 })();
