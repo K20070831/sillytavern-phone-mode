@@ -70,77 +70,41 @@
         return b;
     }
 
-    // ── 4. API 调用 (极简超速发包 + 世界书提取) ──
+    // ── 4. API 调用 (完美兼容 Gemini 的静默沙盒) ──
     async function fetchSMS(userMsg) {
         const c = getCtx();
         conversationHistory.push({ role: 'user', content: userMsg });
 
-        // 1. 提取角色信息 (严格限长，提速)
-        const char = c.characters && c.characters[c.characterId] ? c.characters[c.characterId] : {};
-        const isMainChar = currentPersona === (char.name || '');
-        let cardDesc = char.description || '';
-        let cardPersonality = char.personality || '';
-        if (cardDesc.length > 600) cardDesc = cardDesc.substring(0, 600) + '...';
-        if (cardPersonality.length > 200) cardPersonality = cardPersonality.substring(0, 200) + '...';
-
-        // 2. 提取世界书 (只取前 5 条核心词条，防过载)
-        let worldBookText = '';
-        try {
-            if (c.worldInfo) {
-                worldBookText = Object.values(c.worldInfo)
-                    .filter(e => e && e.content)
-                    .map(e => e.content)
-                    .slice(0, 5)
-                    .join('\n');
-                if (worldBookText.length > 500) worldBookText = worldBookText.substring(0, 500) + '...';
-            }
-        } catch (err) {}
-
-        // 3. 提取主线剧情 (压缩至 8 条，提速)
-        let mainChatContext = "无";
-        if (Array.isArray(c.chat) && c.chat.length > 0) {
-            const recentMainChat = c.chat.slice(-8);
-            mainChatContext = recentMainChat.map(m => `${m.is_user ? 'User' : m.name}: ${m.mes.replace(/<[^>]+>/g, '').substring(0, 100)}`).join('\n');
-        }
-
         const phoneHistoryStr = conversationHistory.slice(-8).map(m => m.role === 'user' ? `User: ${m.content}` : `${currentPersona}: ${m.content}`).join('\n');
         
-        // 4. 极简版短信专属 Prompt
-        const isolatedPrompt = `[SYSTEM: SMS CHAT MODE]
-Role: ${currentPersona}
-${isMainChar ? `Traits: ${cardDesc}\nPersonality: ${cardPersonality}\n` : ''}${worldBookText ? `Worldbook: ${worldBookText}\n` : ''}
-[STORY CONTEXT]
-${mainChatContext}
+        // 【大道至简】：利用 QuietPrompt，酒馆会自动把主线剧情、卡片和世界书排在上面！我们只需要在最底部追加小游戏规则。
+        const isolatedPrompt = `[SYSTEM OVERRIDE: SMS MINIGAME]
+You are ${currentPersona}. We are pausing the main narration to simulate a text messaging interface.
+Based on the current story context above, reply to the user's latest SMS.
 
-[RULES]
-1. You are texting on a smartphone. NO long narratives.
-2. NO novel formatting, NO A/B/C/D options, NO status bars, NO XML tags like <thinking>.
-3. Write ONLY your text messages INSIDE <SMS> and </SMS> tags!
-4. Keep it to 2-6 short sentences, separated by "/".
-5. Send images using (图片: description).
-
-[PHONE CHAT]
+[SMS CHAT HISTORY]
 ${phoneHistoryStr}
-
 User: ${userMsg}
-${currentPersona}:`;
+
+RULES:
+1. YOU MUST write your text messages INSIDE <SMS> and </SMS> tags!
+2. Inside the tags, provide ONLY the message text. 2-6 short sentences separated by "/".
+3. NO narration, NO thoughts, NO A/B/C/D choices inside the <SMS> tags.
+4. You may use (图片: description) for sending images.
+
+${currentPersona}'s output:`;
 
         try {
-            let raw = '';
-            if (typeof c.generateRaw === 'function') {
-                raw = await c.generateRaw([{ role: 'user', content: isolatedPrompt }], '', false, false);
-            } else {
-                raw = await c.generateQuietPrompt(isolatedPrompt, false, false);
-            }
+            // 彻底放弃会导致 Gemini 报错的 generateRaw
+            let raw = await c.generateQuietPrompt(isolatedPrompt, false, false);
+            let clean = raw ?? '';
 
-            let clean = typeof raw === 'string' ? raw : (raw?.choices?.[0]?.message?.content || String(raw));
-
-            // 提取 <SMS> 内容
+            // 【阳谋提取】：只取 <SMS> 里的纯净短信，完美绕过 A/B/C/D 选项污染
             const smsMatch = clean.match(/<SMS>([\s\S]*?)<\/SMS>/i);
             if (smsMatch) {
                 clean = smsMatch[1];
             } else {
-                // 选项与乱码铡刀
+                // 如果 AI 忘了加标签，启动终极物理铡刀
                 clean = clean.replace(/(?:^|\n)\s*A[、\.\:][\s\S]*/i, ''); 
                 clean = clean.replace(/(?:^|\n)\s*【[^】]+】[\s\S]*/i, ''); 
                 clean = clean.replace(/<[^>]*>[\s\S]*?(<\/[^>]*>|$)/g, ''); 
@@ -172,7 +136,7 @@ ${currentPersona}:`;
 
             return sentences;
         } catch (e) {
-            return ['（发送失败，请重试）'];
+            return ['（信号不佳，请重发）'];
         }
     }
 
@@ -312,7 +276,7 @@ ${currentPersona}:`;
         const defaultChar = c?.characters?.[c.characterId]?.name ?? 'AI';
 
         phoneWindow = document.createElement('div');
-        phoneWindow.id = 'pm-iphone-v30';
+        phoneWindow.id = 'pm-iphone-v31';
         phoneWindow.innerHTML = `
 <div class="pm-island"></div>
 <div class="pm-main-ui">
@@ -340,13 +304,13 @@ ${currentPersona}:`;
     };
 
     // ── 9. CSS 样式 ──
-    if (!document.getElementById('pm-v30-css')) {
+    if (!document.getElementById('pm-v31-css')) {
         const s = document.createElement('style');
-        s.id = 'pm-v30-css';
+        s.id = 'pm-v31-css';
         s.textContent = `
-#pm-iphone-v30 { position: fixed; bottom: 40px; right: 40px; width: 330px; height: 580px; background: #fff; border: 10px solid #1a1a1a; border-radius: 45px; z-index: 100000; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 20px 60px rgba(0,0,0,0.45); transition: 0.35s cubic-bezier(0.18, 0.89, 0.32, 1.2); font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif; touch-action: none; min-width: 330px !important; max-width: 330px !important; min-height: 580px !important; max-height: 580px !important; box-sizing: border-box !important; }
-#pm-iphone-v30.is-min { height: 50px !important; min-height: 50px !important; max-height: 50px !important; width: 140px !important; min-width: 140px !important; max-width: 140px !important; border-radius: 25px; border-width: 6px; }
-#pm-iphone-v30.is-min .pm-main-ui { display: none !important; }
+#pm-iphone-v31 { position: fixed; bottom: 40px; right: 40px; width: 330px; height: 580px; background: #fff; border: 10px solid #1a1a1a; border-radius: 45px; z-index: 100000; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 20px 60px rgba(0,0,0,0.45); transition: 0.35s cubic-bezier(0.18, 0.89, 0.32, 1.2); font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif; touch-action: none; min-width: 330px !important; max-width: 330px !important; min-height: 580px !important; max-height: 580px !important; box-sizing: border-box !important; }
+#pm-iphone-v31.is-min { height: 50px !important; min-height: 50px !important; max-height: 50px !important; width: 140px !important; min-width: 140px !important; max-width: 140px !important; border-radius: 25px; border-width: 6px; }
+#pm-iphone-v31.is-min .pm-main-ui { display: none !important; }
 .pm-island { width: 100px; height: 26px; background: #1a1a1a; margin: 8px auto 4px; border-radius: 14px; cursor: move; flex-shrink: 0; touch-action: none; z-index: 10;}
 .pm-main-ui { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
 .pm-navbar { display: flex; align-items: center; justify-content: space-between; padding: 6px 14px; border-bottom: 1px solid #f0f0f0; flex-shrink: 0; }
@@ -391,7 +355,7 @@ ${currentPersona}:`;
         document.head.appendChild(s);
     }
 
-    // ── 10. 指令引擎 ──
+    // ── 11. 指令引擎 ──
     function registerSlashCommand() {
         if (window.SlashCommandParser && window.SlashCommand) {
             try {
@@ -416,5 +380,5 @@ ${currentPersona}:`;
         }
     }, true);
 
-    console.log("[Phone Mode] V30 (Light-speed & Omniscient Edition) Loaded.");
+    console.log("[Phone Mode] V31 (API Safemode & Guillotine Edition) Loaded.");
 })();
