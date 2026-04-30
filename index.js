@@ -46,7 +46,43 @@
         handle.addEventListener('touchstart', onStart, { passive: false }); window.addEventListener('touchmove', onMove, { passive: false }); window.addEventListener('touchend', onEnd);
     }
 
-    // ── 3. 渲染气泡 ──
+    // ── 3. V18 暴君级净化器 (宁可错杀绝不漏网) ──
+    function processResponse(text) {
+        if (!text) return [];
+        let clean = text.replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+        
+        // 1. 无差别斩杀所有 HTML/XML 块 (不管名字叫什么，只要带尖括号全杀)
+        clean = clean.replace(//g, '');
+        clean = clean.replace(/<[^>]+>[\s\S]*?<\/[^>]+>/g, ''); 
+        clean = clean.replace(/<[^>]+>/g, ''); // 扫除单边残缺标签
+        
+        // 2. 无差别斩杀文末状态栏和特殊标记
+        clean = clean.replace(/\[[^\]]+\]/g, ''); // 杀 [任何东西]
+        clean = clean.replace(/【[^】]+】[\s\S]*?(?=\/|$)/g, ''); // 杀 【文末状态】及后面的内容
+        
+        // 3. 斩杀动作旁白，但严格保护 (图片: xx) 和 (转账: xx)
+        clean = clean.replace(/\*[^*]+\*/g, ''); 
+        clean = clean.replace(/[\(（](?!\s*(转账|图片|系统))[^\)）]+[\)\）]/g, ''); 
+        
+        // 4. 解决 V18 的冒号吃句子 Bug
+        clean = clean.replace(/^.{0,15}(:|：)\s*/, ''); 
+        
+        // 5. 干掉前面几行没有 / 的垃圾格式文本（防止标题漏出）
+        let lines = clean.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+        while (lines.length > 1 && !lines[0].includes('/') && lines[0].length < 15 && !lines[0].match(/(图片|转账)/)) {
+            lines.shift(); 
+        }
+        clean = lines.join(' ').trim();
+        
+        // 切割气泡
+        let chunks = clean.split(/[/／]/).map(s => s.trim()).filter(s => s.length > 0);
+        if (chunks.length === 1 && clean.length > 20) {
+            chunks = clean.split(/(?<=[。！？!?\n])\s*/).map(s => s.trim()).filter(s => s.length > 0);
+        }
+        return chunks.slice(0, 8);
+    }
+
+    // ── 4. 渲染气泡 ──
     function createBubbleElement(text, side) {
         const b = document.createElement('div');
         b.className = `pm-bubble pm-${side}`;
@@ -70,7 +106,7 @@
         return b;
     }
 
-    // ── 4. API 调用 (核武器级别指令 + 末端注入) ──
+    // ── 5. API 调用 (回归 V18 高压洗脑 Prompt) ──
     async function fetchSMS(userMsg) {
         const c = getCtx();
         conversationHistory.push({ role: 'user', content: userMsg });
@@ -78,61 +114,26 @@
         const activeCharName = c.characters && c.characters[c.characterId] ? c.characters[c.characterId].name : '';
         let personaContext = "";
         if (currentPersona === activeCharName) {
-            personaContext = `(Load character profile: {{persona}} & {{worldbook}}).`;
+            personaContext = `(Load profile: {{persona}}).`;
         } else {
-            personaContext = `(You are an NPC named ${currentPersona}. Generate personality based on {{worldbook}}).`;
+            personaContext = `(You are an NPC named ${currentPersona}).`;
         }
 
-        // 核心升级1：死亡威胁级别的 System Prompt
-        const systemPrompt = `[CRITICAL SYSTEM OVERRIDE: PURE SMS MODE] 
-You retain plot memory, but you are NOW chatting on a smartphone app.
-Role: ${currentPersona}. ${personaContext}
-
-🔴 LETHAL DIRECTIVES (VIOLATION = FAILURE) 🔴:
-1. QUANTITY: You MUST generate EXACTLY 3 to 8 short sentences. NO MORE.
-2. STYLE: Modern texting/SMS style ONLY. Casual, colloquial language.
-3. FORMAT: EVERY SINGLE MESSAGE MUST be separated by the "/" character.
-4. BANNED: NO literary prose! NO asterisks (*smiles*)! NO tags (<thinking>, <novel_header>)! NO narration! PURE TEXT ONLY!
-5. MEDIA: You may use (图片: description) or (转账: amount) if needed.
-
-Example of PERFECT output:
-I just got back / Are we still eating out? / (图片: my cat) / Let me know!`;
+        // 彻底抛弃“剧情延续”的指令，回归 V18 的纯粹短信压制
+        const systemPrompt = `[SYSTEM: SMS_MODE OVERRIDE] 
+1. YOU ARE: "${currentPersona}". ${personaContext}
+2. CRITICAL: CANCEL ALL ECoT, NOVEL FORMATTING, AND STATUS BARS.
+3. NO HTML/XML COMMENTS. NO [TAGS]. NO <thinking>. NO NARRATION.
+4. FORMAT: 3-8 short text messages separated by "/". PURE TEXT ONLY.
+5. Example: "Message 1 / Message 2 / (图片: description)"`;
 
         const historyStr = conversationHistory.slice(-6).map(m => m.role === 'user' ? `{{user}}: ${m.content}` : `${currentPersona}: ${m.content}`).join('\n');
-        
-        // 核心升级2：末端强制注入！紧贴着生成位置再次下达死命令！
-        const prompt = `${systemPrompt}\n\n[Phone Screen History]\n${historyStr}\n\n{{user}}: ${userMsg}\n[SYSTEM: YOU MUST OUTPUT ONLY 3-8 CHAT MESSAGES SEPARATED BY "/". NO NARRATION OR HTML TAGS ALLOWED!]\n${currentPersona} (Typing SMS):`;
+        const prompt = `${systemPrompt}\n\n[History]\n${historyStr}\n\n{{user}}: ${userMsg}\n${currentPersona} (SMS):`;
 
         try {
             let raw = await c.generateQuietPrompt(prompt, false, false);
-            let clean = raw ?? '';
-
-            // 核心修复3：物理蒸发碎屑防线
-            const garbageWords = ['thinking>', 'thought>', 'novel_header>', 'meow_FM>', 'ECoT>', '<thinking', '<novel_header', '<meow_FM'];
-            garbageWords.forEach(word => {
-                clean = clean.replace(new RegExp(word, 'gi'), '');
-            });
-
-            // 常规深度清理
-            clean = clean.replace(/<[^>]*>[\s\S]*?(<\/[^>]*>|$)/g, ''); 
-            clean = clean.replace(/\[[A-Za-z0-9_]+\]/g, ''); 
-            clean = clean.replace(/\*[^*]+\*/g, ''); 
-            clean = clean.replace(/[\(（](?!\s*(转账|图片|系统))[^\)）]+[\)\）]/g, ''); 
-            clean = clean.replace(/^.{0,15}(:|：)\s*/, ''); 
-
-            // 首行异常标题切除
-            let lines = clean.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-            if (lines.length > 1 && !lines[0].includes('/') && lines[0].length < 15 && !lines[0].includes('图片') && !lines[0].includes('转账')) {
-                lines.shift(); 
-            }
-            clean = lines.join(' ');
-            clean = clean.trim();
-
-            let sentences = clean.split(/[/／]/).map(s => s.trim()).filter(s => s.length > 0);
-            if (sentences.length === 1 && clean.length > 20) {
-                sentences = clean.split(/(?<=[。！？!?\n])\s*/).map(s => s.trim()).filter(s => s.length > 0);
-            }
-            sentences = sentences.slice(0, 8); // 强制斩断超出的部分
+            let sentences = processResponse(raw);
+            
             if (sentences.length === 0) sentences = ['...'];
 
             conversationHistory.push({ role: 'assistant', content: sentences.join(' / ') });
@@ -148,7 +149,7 @@ I just got back / Are we still eating out? / (图片: my cat) / Let me know!`;
         }
     }
 
-    // ── 5. 气泡与 UI 状态 ──
+    // ── 6. UI 状态 (打字动画) ──
     function addBubble(text, side) {
         const list = phoneWindow?.querySelector('.pm-msg-list');
         if (!list) return;
@@ -169,7 +170,7 @@ I just got back / Are we still eating out? / (图片: my cat) / Let me know!`;
 
     function hideTyping() { document.getElementById('pm-typing')?.remove(); }
 
-    // ── 6. 发送逻辑 ──
+    // ── 7. 发送逻辑 ──
     window.__pmSend = async () => {
         if (isGenerating) return;
         const input = phoneWindow.querySelector('.pm-input');
@@ -199,7 +200,7 @@ I just got back / Are we still eating out? / (图片: my cat) / Let me know!`;
         input.focus();
     };
 
-    // ── 7. 联系人列表 ──
+    // ── 8. 联系人列表 ──
     window.__pmShowList = () => {
         document.getElementById('pm-overlay')?.remove();
         const c = getCtx();
@@ -275,7 +276,7 @@ I just got back / Are we still eating out? / (图片: my cat) / Let me know!`;
     window.__pmToggleMin = () => { isMinimized = !isMinimized; phoneWindow.classList.toggle('is-min', isMinimized); };
     window.__pmEnd = () => { phoneWindow?.remove(); phoneWindow = null; phoneActive = false; isMinimized = false; };
 
-    // ── 8. 初始化 UI ──
+    // ── 9. 初始化 UI ──
     window.__pmOpen = () => {
         if (phoneActive && phoneWindow) { phoneWindow.style.display = 'flex'; return; }
         try { window.__pmHistories = JSON.parse(localStorage.getItem('ST_SMS_DATA_V2')) || {}; } catch {}
@@ -311,7 +312,7 @@ I just got back / Are we still eating out? / (图片: my cat) / Let me know!`;
         window.__pmSwitch(defaultChar);
     };
 
-    // ── 9. CSS 样式 ──
+    // ── 10. CSS 样式 ──
     if (!document.getElementById('pm-v25-css')) {
         const s = document.createElement('style');
         s.id = 'pm-v25-css';
@@ -363,7 +364,7 @@ I just got back / Are we still eating out? / (图片: my cat) / Let me know!`;
         document.head.appendChild(s);
     }
 
-    // ── 10. 指令引擎 ──
+    // ── 11. 指令引擎 ──
     function registerSlashCommand() {
         if (window.SlashCommandParser && window.SlashCommand) {
             try {
@@ -388,5 +389,5 @@ I just got back / Are we still eating out? / (图片: my cat) / Let me know!`;
         }
     }, true);
 
-    console.log("[Phone Mode] V25 (Nuclear Threat Edition) Loaded.");
+    console.log("[Phone Mode] V25 (V18 Soul & Nuke Edition) Loaded.");
 })();
