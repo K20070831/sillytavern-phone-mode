@@ -70,7 +70,7 @@
         return b;
     }
 
-    // ── 4. API 调用 (格式剥离与记忆同步) ──
+    // ── 4. API 调用 (核武器级别指令 + 末端注入) ──
     async function fetchSMS(userMsg) {
         const c = getCtx();
         conversationHistory.push({ role: 'user', content: userMsg });
@@ -83,27 +83,31 @@
             personaContext = `(You are an NPC named ${currentPersona}. Generate personality based on {{worldbook}}).`;
         }
 
-        // 核心修复1：同步剧情记忆，但强行剥离小说格式
-        const systemPrompt = `[FORMAT SHIFT ONLY: RETAIN PLOT MEMORY] 
-You remember everything that just happened in the main story, but you are now switching to a PURE SMS INTERFACE. 
+        // 核心升级1：死亡威胁级别的 System Prompt
+        const systemPrompt = `[CRITICAL SYSTEM OVERRIDE: PURE SMS MODE] 
+You retain plot memory, but you are NOW chatting on a smartphone app.
 Role: ${currentPersona}. ${personaContext}
 
-RULES:
-1. RETAIN story context, but STOP narrating. ONLY generate short text messages.
-2. ABSOLUTELY NO <thinking>, NO <novel_header>, NO <meow_FM>, NO [TAGS].
-3. NO NARRATION OR THOUGHTS. ONLY PURE TEXT.
-4. Separate sentences with "/".
-5. Examples: "I am here / Where are you? / (图片: cat)"`;
+🔴 LETHAL DIRECTIVES (VIOLATION = FAILURE) 🔴:
+1. QUANTITY: You MUST generate EXACTLY 3 to 8 short sentences. NO MORE.
+2. STYLE: Modern texting/SMS style ONLY. Casual, colloquial language.
+3. FORMAT: EVERY SINGLE MESSAGE MUST be separated by the "/" character.
+4. BANNED: NO literary prose! NO asterisks (*smiles*)! NO tags (<thinking>, <novel_header>)! NO narration! PURE TEXT ONLY!
+5. MEDIA: You may use (图片: description) or (转账: amount) if needed.
+
+Example of PERFECT output:
+I just got back / Are we still eating out? / (图片: my cat) / Let me know!`;
 
         const historyStr = conversationHistory.slice(-6).map(m => m.role === 'user' ? `{{user}}: ${m.content}` : `${currentPersona}: ${m.content}`).join('\n');
-        const prompt = `${systemPrompt}\n\n[Phone Screen]\n${historyStr}\n\n{{user}}: ${userMsg}\n${currentPersona} (Typing SMS):`;
+        
+        // 核心升级2：末端强制注入！紧贴着生成位置再次下达死命令！
+        const prompt = `${systemPrompt}\n\n[Phone Screen History]\n${historyStr}\n\n{{user}}: ${userMsg}\n[SYSTEM: YOU MUST OUTPUT ONLY 3-8 CHAT MESSAGES SEPARATED BY "/". NO NARRATION OR HTML TAGS ALLOWED!]\n${currentPersona} (Typing SMS):`;
 
         try {
-            // QuietPrompt 会自动把主聊天记录带上，从而实现记忆同步
             let raw = await c.generateQuietPrompt(prompt, false, false);
             let clean = raw ?? '';
 
-            // 核心修复2：物理蒸发碎屑防线（即使 AI 想写标签，也会被这里直接切除）
+            // 核心修复3：物理蒸发碎屑防线
             const garbageWords = ['thinking>', 'thought>', 'novel_header>', 'meow_FM>', 'ECoT>', '<thinking', '<novel_header', '<meow_FM'];
             garbageWords.forEach(word => {
                 clean = clean.replace(new RegExp(word, 'gi'), '');
@@ -128,7 +132,7 @@ RULES:
             if (sentences.length === 1 && clean.length > 20) {
                 sentences = clean.split(/(?<=[。！？!?\n])\s*/).map(s => s.trim()).filter(s => s.length > 0);
             }
-            sentences = sentences.slice(0, 8);
+            sentences = sentences.slice(0, 8); // 强制斩断超出的部分
             if (sentences.length === 0) sentences = ['...'];
 
             conversationHistory.push({ role: 'assistant', content: sentences.join(' / ') });
@@ -280,7 +284,7 @@ RULES:
         const defaultChar = c?.characters?.[c.characterId]?.name ?? 'AI';
 
         phoneWindow = document.createElement('div');
-        phoneWindow.id = 'pm-iphone-v24';
+        phoneWindow.id = 'pm-iphone-v25';
         phoneWindow.innerHTML = `
 <div class="pm-island"></div>
 <div class="pm-main-ui">
@@ -308,13 +312,13 @@ RULES:
     };
 
     // ── 9. CSS 样式 ──
-    if (!document.getElementById('pm-v24-css')) {
+    if (!document.getElementById('pm-v25-css')) {
         const s = document.createElement('style');
-        s.id = 'pm-v24-css';
+        s.id = 'pm-v25-css';
         s.textContent = `
-#pm-iphone-v24 { position: fixed; bottom: 40px; right: 40px; width: 330px; height: 580px; background: #fff; border: 10px solid #1a1a1a; border-radius: 45px; z-index: 100000; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 20px 60px rgba(0,0,0,0.45); transition: 0.35s cubic-bezier(0.18, 0.89, 0.32, 1.2); font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif; touch-action: none; min-width: 330px !important; max-width: 330px !important; min-height: 580px !important; max-height: 580px !important; box-sizing: border-box !important; }
-#pm-iphone-v24.is-min { height: 50px !important; min-height: 50px !important; max-height: 50px !important; width: 140px !important; min-width: 140px !important; max-width: 140px !important; border-radius: 25px; border-width: 6px; }
-#pm-iphone-v24.is-min .pm-main-ui { display: none !important; }
+#pm-iphone-v25 { position: fixed; bottom: 40px; right: 40px; width: 330px; height: 580px; background: #fff; border: 10px solid #1a1a1a; border-radius: 45px; z-index: 100000; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 20px 60px rgba(0,0,0,0.45); transition: 0.35s cubic-bezier(0.18, 0.89, 0.32, 1.2); font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif; touch-action: none; min-width: 330px !important; max-width: 330px !important; min-height: 580px !important; max-height: 580px !important; box-sizing: border-box !important; }
+#pm-iphone-v25.is-min { height: 50px !important; min-height: 50px !important; max-height: 50px !important; width: 140px !important; min-width: 140px !important; max-width: 140px !important; border-radius: 25px; border-width: 6px; }
+#pm-iphone-v25.is-min .pm-main-ui { display: none !important; }
 .pm-island { width: 100px; height: 26px; background: #1a1a1a; margin: 8px auto 4px; border-radius: 14px; cursor: move; flex-shrink: 0; touch-action: none; z-index: 10;}
 .pm-main-ui { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
 .pm-navbar { display: flex; align-items: center; justify-content: space-between; padding: 6px 14px; border-bottom: 1px solid #f0f0f0; flex-shrink: 0; }
@@ -384,5 +388,5 @@ RULES:
         }
     }, true);
 
-    console.log("[Phone Mode] V24 (Plot Memory + Format Strip Edition) Loaded.");
+    console.log("[Phone Mode] V25 (Nuclear Threat Edition) Loaded.");
 })();
