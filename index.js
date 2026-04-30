@@ -1,7 +1,7 @@
 (async function () {
     await new Promise(r => setTimeout(r, 1000));
 
-    // ── 1. 全局状态 (回归 V10 最安全的内存模式) ──
+    // ── 1. 全局状态 ──
     window.__pmHistories = window.__pmHistories || {};
     let phoneActive = false;
     let phoneWindow = null;
@@ -12,7 +12,7 @@
 
     const getCtx = () => typeof SillyTavern !== 'undefined' ? SillyTavern.getContext() : null;
 
-    // ── 2. 全平台拖拽引擎 (V10 原版，完美触控) ──
+    // ── 2. 全平台拖拽引擎 ──
     function bindIsland(el, handle) {
         let isDragging = false;
         let startX, startY, startL, startT;
@@ -52,21 +52,23 @@
             if (!isDragging) return;
             isDragging = false;
             el.style.transition = '0.35s cubic-bezier(0.18, 0.89, 0.32, 1.2)';
-            if (!moved) __pmToggleMin();
+            if (!moved) window.__pmToggleMin();
         };
 
         handle.addEventListener('mousedown', onStart); window.addEventListener('mousemove', onMove); window.addEventListener('mouseup', onEnd);
         handle.addEventListener('touchstart', onStart, { passive: false }); window.addEventListener('touchmove', onMove, { passive: false }); window.addEventListener('touchend', onEnd);
     }
 
-    // ── 3. 专杀 ECoT 净化器 (无中文正则，避开编码崩溃) ──
+    // ── 3. 专杀 ECoT 净化器 (动态正则防网页吞噬) ──
     function processResponse(text) {
         if (!text) return [];
         let clean = text.replace(/&lt;/g, '<').replace(/&gt;/g, '>');
         
-        // 1. 物理抹除 ECoT 注释 (就是导致你报错的那个 )
-        clean = clean.replace(//g, '');
-        // 2. 抹除所有英文标签如 <thinking> <thought>
+        // 1. 物理抹除 ECoT 注释 (使用动态拼装防拦截)
+        const htmlCommentRegex = new RegExp('<' + '!--[\\s\\S]*?--' + '>', 'g');
+        clean = clean.replace(htmlCommentRegex, '');
+        
+        // 2. 抹除所有英文标签如 thinking thought
         clean = clean.replace(/<[A-Za-z]+>[\s\S]*?<\/[A-Za-z]+>/g, '');
         // 3. 抹除如 [CHAP] [TITLE] 的方括号标记
         clean = clean.replace(/\[[A-Za-z0-9_]+\]/g, '');
@@ -85,7 +87,7 @@
         return chunks.slice(0, 8);
     }
 
-    // ── 4. 渲染气泡 (V10 原版) ──
+    // ── 4. 渲染气泡 ──
     function createBubbleElement(text, side) {
         const b = document.createElement('div');
         b.className = `pm-bubble pm-${side}`;
@@ -107,11 +109,10 @@
         const c = getCtx();
         conversationHistory.push({ role: 'user', content: userMsg });
         
-        // 专门针对 ECoT 的摧毁性 Prompt
         const systemPrompt = `[SYSTEM: SMS_MODE OVERRIDE] 
 1. YOU ARE: "${currentPersona}". (Load {{persona}} & {{worldbook}}).
 2. CANCEL ALL ECoT, writing instructions, and novel formatting.
-3. NO comments. NO [TAGS]. NO <thinking>. NO NARRATION.
+3. NO HTML COMMENTS. NO [TAGS]. NO <thinking>. NO NARRATION.
 4. FORMAT: 3-8 short messages separated by "/". PURE TEXT ONLY.
 5. Example: "Message 1 / Message 2 / (图片+description)"`;
 
@@ -133,7 +134,7 @@
         window.__pmHistories[id][currentPersona] = [...conversationHistory.slice(-20)];
     }
 
-    // ── 6. UI 交互 (V10 原版) ──
+    // ── 6. UI 交互 ──
     function addBubble(text, side) {
         const list = phoneWindow?.querySelector('.pm-msg-list');
         if (!list) return;
@@ -166,10 +167,10 @@
             <div class="pm-modal">
                 <div style="display:flex;justify-content:space-between;margin-bottom:15px"><b>联系人管理</b><span onclick="this.closest('#pm-overlay').remove()">✕</span></div>
                 <div style="max-height:200px;overflow-y:auto">
-                    ${list.map(n => `<div class="pm-li"><span onclick="__pmSwitch('${n}')">${n}</span><i onclick="__pmDel('${n}')">移除</i></div>`).join('')}
+                    ${list.map(n => `<div class="pm-li"><span onclick="window.__pmSwitch('${n}')">${n}</span><i onclick="window.__pmDel('${n}')">移除</i></div>`).join('')}
                 </div>
                 <input id="pm-add" placeholder="新名字..." style="width:100%;padding:8px;margin-top:10px;border-radius:8px;border:1px solid #ddd;box-sizing:border-box">
-                <button onclick="__pmSwitch(document.getElementById('pm-add').value)" style="width:100%;margin-top:10px;padding:10px;background:#007aff;color:#fff;border:none;border-radius:10px">添加并切换</button>
+                <button onclick="window.__pmSwitch(document.getElementById('pm-add').value)" style="width:100%;margin-top:10px;padding:10px;background:#007aff;color:#fff;border:none;border-radius:10px">添加并切换</button>
             </div>`;
         document.body.appendChild(ov);
     };
@@ -191,7 +192,7 @@
         if(document.getElementById('pm-overlay')) document.getElementById('pm-overlay').remove();
     };
 
-    window.__pmDel = (n) => { delete window.__pmHistories[`${getCtx().characterId}_${getCtx().chat_file || 'default'}`][n]; __pmShowList(); };
+    window.__pmDel = (n) => { delete window.__pmHistories[`${getCtx().characterId}_${getCtx().chat_file || 'default'}`][n]; window.__pmShowList(); };
     window.__pmToggleMin = () => { isMinimized = !isMinimized; phoneWindow.classList.toggle('is-min', isMinimized); };
     window.__pmEnd = () => { phoneWindow?.remove(); phoneActive = false; };
 
@@ -201,30 +202,30 @@
         const c = getCtx();
         const defaultChar = c?.characters?.[c.characterId]?.name ?? 'AI';
         phoneWindow = document.createElement('div');
-        phoneWindow.id = 'pm-iphone-v14';
+        phoneWindow.id = 'pm-iphone-v15';
         phoneWindow.innerHTML = `
             <div class="pm-island"></div>
             <div class="pm-main-ui">
                 <div class="pm-navbar">
-                    <button onclick="__pmShowList()" class="pm-nav-btn">≡</button>
+                    <button onclick="window.__pmShowList()" class="pm-nav-btn">≡</button>
                     <div class="pm-name">${defaultChar}</div>
-                    <button onclick="__pmEnd()" class="pm-nav-btn" style="color:red">✕</button>
+                    <button onclick="window.__pmEnd()" class="pm-nav-btn" style="color:red">✕</button>
                 </div>
                 <div class="pm-msg-list"></div>
                 <div class="pm-input-bar">
                     <input class="pm-input" placeholder="iMessage">
-                    <button onclick="__pmSend()" class="pm-up-btn">↑</button>
+                    <button onclick="window.__pmSend()" class="pm-up-btn">↑</button>
                 </div>
             </div>`;
         document.body.appendChild(phoneWindow);
         phoneActive = true;
         bindIsland(phoneWindow, phoneWindow.querySelector('.pm-island'));
-        __pmSwitch(defaultChar);
-        phoneWindow.querySelector('.pm-input').onkeydown = e => { if(e.key === 'Enter') __pmSend(); };
+        window.__pmSwitch(defaultChar);
+        phoneWindow.querySelector('.pm-input').onkeydown = e => { if(e.key === 'Enter') window.__pmSend(); };
     };
 
     const css = `
-        #pm-iphone-v14 {
+        #pm-iphone-v15 {
             position: fixed; bottom: 40px; right: 40px; width: 330px; height: 580px;
             background: #fff; border: 10px solid #111; border-radius: 45px;
             z-index: 100000; display: flex; flex-direction: column; overflow: hidden;
@@ -232,9 +233,9 @@
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
             touch-action: none;
         }
-        #pm-iphone-v14.is-min { height: 48px; width: 130px; border-radius: 24px; border-width: 6px; }
-        #pm-iphone-v14.is-min .pm-main-ui { display: none; }
-        .pm-island { width: 100px; height: 26px; background: #000; margin: 10px auto; border-radius: 15px; cursor: move; flex-shrink: 0; touch-action: none; }
+        #pm-iphone-v15.is-min { height: 48px; width: 130px; border-radius: 24px; border-width: 6px; }
+        #pm-iphone-v15.is-min .pm-main-ui { display: none; }
+        .pm-island { width: 100px; height: 26px; background: #000; margin: 10px auto; border-radius: 15px; cursor: move; flex-shrink: 0; touch-action: none; z-index: 10; }
         .pm-main-ui { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
         .pm-navbar { display: flex; align-items: center; justify-content: space-between; padding: 5px 15px; border-bottom: 1px solid #f2f2f7; }
         .pm-name { font-weight: 700; color: #000; font-size: 15px; }
@@ -257,18 +258,21 @@
         .pm-li i { color: #ff3b30; cursor: pointer; font-style: normal; }
     `;
 
-    if (!document.getElementById('pm-v14-css')) {
-        const s = document.createElement('style'); s.id = 'pm-v14-css'; s.innerHTML = css; document.head.appendChild(s);
+    if (!document.getElementById('pm-v15-css')) {
+        const s = document.createElement('style'); s.id = 'pm-v15-css'; s.innerHTML = css; document.head.appendChild(s);
     }
 
     document.addEventListener('keydown', e => {
         if(e.key === 'Enter' && !e.shiftKey) {
             const ta = document.getElementById('send_textarea');
             if(ta && ta.value.trim() === '/phone') {
-                e.preventDefault(); ta.value = ''; __pmOpen();
+                e.preventDefault(); 
+                ta.value = ''; 
+                ta.dispatchEvent(new Event('input', { bubbles: true }));
+                window.__pmOpen();
             }
         }
     }, true);
 
-    console.log("iPhone SMS V14 (V10 Core + ECoT Nuke) Loaded.");
+    console.log("iPhone SMS V15 (HTML Comment Fix) Loaded.");
 })();
