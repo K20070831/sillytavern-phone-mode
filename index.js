@@ -12,18 +12,10 @@
 
     const getCtx = () => typeof SillyTavern !== 'undefined' ? SillyTavern.getContext() : null;
 
-    // ── 2. 全平台拖拽引擎 ──
+    // ── 2. 全平台触控拖拽 ──
     function bindIsland(el, handle) {
-        let isDragging = false;
-        let startX, startY, startL, startT;
-        let moved = false;
-
-        const getCoord = (e) => {
-            if (e.touches && e.touches.length > 0) {
-                return { x: e.touches[0].clientX, y: e.touches[0].clientY };
-            }
-            return { x: e.clientX, y: e.clientY };
-        };
+        let isDragging = false, startX, startY, startL, startT, moved = false;
+        const getCoord = (e) => e.touches ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : { x: e.clientX, y: e.clientY };
 
         const onStart = (e) => {
             if (e.target.tagName === 'BUTTON') return;
@@ -37,18 +29,13 @@
         const onMove = (e) => {
             if (!isDragging) return;
             const coords = getCoord(e);
-            let dx = coords.x - startX;
-            let dy = coords.y - startY;
-            if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
-                moved = true;
-                if (e.cancelable) e.preventDefault(); 
-            }
-            el.style.left = (startL + dx) + 'px';
-            el.style.top = (startT + dy) + 'px';
+            let dx = coords.x - startX, dy = coords.y - startY;
+            if (Math.abs(dx) > 5 || Math.abs(dy) > 5) { moved = true; if (e.cancelable) e.preventDefault(); }
+            el.style.left = (startL + dx) + 'px'; el.style.top = (startT + dy) + 'px';
             el.style.bottom = 'auto'; el.style.right = 'auto';
         };
 
-        const onEnd = (e) => {
+        const onEnd = () => {
             if (!isDragging) return;
             isDragging = false;
             el.style.transition = '0.35s cubic-bezier(0.18, 0.89, 0.32, 1.2)';
@@ -59,27 +46,20 @@
         handle.addEventListener('touchstart', onStart, { passive: false }); window.addEventListener('touchmove', onMove, { passive: false }); window.addEventListener('touchend', onEnd);
     }
 
-    // ── 3. 专杀 ECoT 净化器 (动态正则防网页吞噬) ──
+    // ── 3. 专杀 ECoT 净化器 (放宽图片和转账的识别) ──
     function processResponse(text) {
         if (!text) return [];
         let clean = text.replace(/&lt;/g, '<').replace(/&gt;/g, '>');
         
-        // 1. 物理抹除 ECoT 注释 (使用动态拼装防拦截)
-        const htmlCommentRegex = new RegExp('<' + '!--[\\s\\S]*?--' + '>', 'g');
-        clean = clean.replace(htmlCommentRegex, '');
-        
-        // 2. 抹除所有英文标签如 thinking thought
+        clean = clean.replace(new RegExp('<' + '!--[\\s\\S]*?--' + '>', 'g'), '');
         clean = clean.replace(/<[A-Za-z]+>[\s\S]*?<\/[A-Za-z]+>/g, '');
-        // 3. 抹除如 [CHAP] [TITLE] 的方括号标记
         clean = clean.replace(/\[[A-Za-z0-9_]+\]/g, '');
-        // 4. 抹除动作旁白
         clean = clean.replace(/\*[^*]+\*/g, '');
-        clean = clean.replace(/[\(（](?!(转账|图片))[^\)）]+[\)\）]/g, '');
-        // 5. 抹除名字前缀
+        // 核心修复：允许 (图片: xxx) (转账: xxx) 存活，杀掉其他旁白
+        clean = clean.replace(/[\(（](?!\s*(转账|图片|系统))[^\)）]+[\)\）]/g, '');
         clean = clean.replace(/^(.*?)(: |：)/gm, '');
         clean = clean.trim();
         
-        // 切割多气泡
         let chunks = clean.split(/[/／]/).map(s => s.trim()).filter(s => s.length > 0);
         if (chunks.length === 1 && clean.length > 20) {
             chunks = clean.split(/(?<=[。！？!?\n])\s*/).map(s => s.trim()).filter(s => s.length > 0);
@@ -87,34 +67,49 @@
         return chunks.slice(0, 8);
     }
 
-    // ── 4. 渲染气泡 ──
+    // ── 4. 渲染气泡 (支持冒号和加号) ──
     function createBubbleElement(text, side) {
         const b = document.createElement('div');
         b.className = `pm-bubble pm-${side}`;
         let html = text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
         
-        html = html.replace(/[\(（]转账\+(\d+)[\)\）]/g, 
-            `<div class="pm-transfer-card"><div class="pm-t-icon">¥</div><div class="pm-t-info"><b>收到转账</b><span>¥$1.00</span></div></div>`);
-        html = html.replace(/[\(（]图片\+([^)]+)[\)\）]/g, `<div class="pm-img-card">🖼️ 图片：$1</div>`);
+        // 核心修复：兼容 (图片：猫) 和 (转账+100)
+        html = html.replace(/[\(（]\s*(转账|图片)\s*[+：:\s]*([^)）]+)[\)\）]/g, (match, type, content) => {
+            if (type === '转账') {
+                let amount = parseFloat(content) || 100;
+                return `<div class="pm-transfer-card"><div class="pm-t-icon">¥</div><div class="pm-t-info"><b>收到转账</b><span>¥${amount.toFixed(2)}</span></div></div>`;
+            } else {
+                return `<div class="pm-img-card">🖼️ 图片：${content}</div>`;
+            }
+        });
         
         b.innerHTML = html;
-        if (text.match(/^[\(（](转账|图片)\+[^)]+[\)\）]$/)) {
+        if (text.match(/^[\(（]\s*(转账|图片)\s*[+：:\s]*([^)）]+)[\)\）]$/)) {
             b.style.background = 'transparent'; b.style.boxShadow = 'none'; b.style.padding = '0';
         }
         return b;
     }
 
-    // ── 5. API 呼叫 (最高压覆盖指令) ──
+    // ── 5. API 呼叫 (解决身份错乱) ──
     async function fetchSMS(userMsg) {
         const c = getCtx();
         conversationHistory.push({ role: 'user', content: userMsg });
         
+        // 核心修复：身份隔离判断
+        const activeCharName = c.characters && c.characters[c.characterId] ? c.characters[c.characterId].name : '';
+        let personaContext = "";
+        if (currentPersona === activeCharName) {
+            personaContext = `(Load character profile: {{persona}} & {{worldbook}}).`;
+        } else {
+            personaContext = `(You are an NPC named ${currentPersona}. Generate personality based on {{worldbook}} and current context).`;
+        }
+
         const systemPrompt = `[SYSTEM: SMS_MODE OVERRIDE] 
-1. YOU ARE: "${currentPersona}". (Load {{persona}} & {{worldbook}}).
+1. YOU ARE: "${currentPersona}". ${personaContext}
 2. CANCEL ALL ECoT, writing instructions, and novel formatting.
 3. NO HTML COMMENTS. NO [TAGS]. NO <thinking>. NO NARRATION.
 4. FORMAT: 3-8 short messages separated by "/". PURE TEXT ONLY.
-5. Example: "Message 1 / Message 2 / (图片+description)"`;
+5. Example: "Message 1 / Message 2 / (图片: description) / (转账: 50)"`;
 
         const prompt = `${systemPrompt}\n\n[History]\n${conversationHistory.slice(-4).map(m => m.content).join('\n')}\n\n{{user}}: ${userMsg}\n${currentPersona}:`;
 
@@ -123,18 +118,17 @@
             let sentences = processResponse(res);
             if (sentences.length === 0) sentences = ["..."];
             conversationHistory.push({ role: 'assistant', content: sentences.join(' / ') });
-            saveStore();
+            
+            const id = `${c.characterId}_${c.chat_file || 'default'}`;
+            if (!window.__pmHistories[id]) window.__pmHistories[id] = {};
+            window.__pmHistories[id][currentPersona] = [...conversationHistory.slice(-20)];
+            localStorage.setItem('ST_SMS_DATA_V2', JSON.stringify(window.__pmHistories));
+            
             return sentences;
         } catch (e) { return ["（发送失败）"]; }
     }
 
-    function saveStore() {
-        const id = `${getCtx().characterId}_${getCtx().chat_file || 'default'}`;
-        if (!window.__pmHistories[id]) window.__pmHistories[id] = {};
-        window.__pmHistories[id][currentPersona] = [...conversationHistory.slice(-20)];
-    }
-
-    // ── 6. UI 交互 ──
+    // ── 6. UI 交互 (解决用户输入分泡) ──
     function addBubble(text, side) {
         const list = phoneWindow?.querySelector('.pm-msg-list');
         if (!list) return;
@@ -148,9 +142,13 @@
         const val = input.value.trim();
         if (!val) return;
         input.value = '';
-        addBubble(val, 'right');
+        
+        // 核心修复：把用户的输入也用 / 切割出多个气泡
+        const userChunks = val.split(/[/／]/).map(s => s.trim()).filter(s => s.length > 0);
+        userChunks.forEach(c => addBubble(c, 'right'));
+        
         isGenerating = true;
-        const sentenceList = await fetchSMS(val);
+        const sentenceList = await fetchSMS(val); // 发送完整字符串给AI以保持上下文
         for (const s of sentenceList) {
             await new Promise(r => setTimeout(r, 600));
             addBubble(s, 'left');
@@ -159,7 +157,8 @@
     };
 
     window.__pmShowList = () => {
-        const id = `${getCtx().characterId}_${getCtx().chat_file || 'default'}`;
+        const c = getCtx();
+        const id = `${c.characterId}_${c.chat_file || 'default'}`;
         const list = Object.keys(window.__pmHistories[id] || {});
         const ov = document.createElement('div');
         ov.id = 'pm-overlay';
@@ -177,7 +176,8 @@
 
     window.__pmSwitch = (name) => {
         if (!name) return;
-        const id = `${getCtx().characterId}_${getCtx().chat_file || 'default'}`;
+        const c = getCtx();
+        const id = `${c.characterId}_${c.chat_file || 'default'}`;
         currentPersona = name;
         conversationHistory = window.__pmHistories[id]?.[name] || [];
         if (phoneWindow) {
@@ -185,31 +185,41 @@
             const list = phoneWindow.querySelector('.pm-msg-list');
             list.innerHTML = '';
             conversationHistory.forEach(m => {
-                const sents = m.content.split(/[/／]|(?<=[。！？!?])\s*/);
+                const sents = m.content.split(/[/／]|(?<=[。！？!?])\s*/).filter(s=>s.trim().length>0);
                 sents.forEach(s => addBubble(s, m.role === 'user' ? 'right' : 'left'));
             });
         }
         if(document.getElementById('pm-overlay')) document.getElementById('pm-overlay').remove();
     };
 
-    window.__pmDel = (n) => { delete window.__pmHistories[`${getCtx().characterId}_${getCtx().chat_file || 'default'}`][n]; window.__pmShowList(); };
+    window.__pmDel = (n) => { 
+        const c = getCtx();
+        const id = `${c.characterId}_${c.chat_file || 'default'}`;
+        delete window.__pmHistories[id][n]; 
+        localStorage.setItem('ST_SMS_DATA_V2', JSON.stringify(window.__pmHistories));
+        window.__pmShowList(); 
+    };
+
     window.__pmToggleMin = () => { isMinimized = !isMinimized; phoneWindow.classList.toggle('is-min', isMinimized); };
     window.__pmEnd = () => { phoneWindow?.remove(); phoneActive = false; };
 
-    // ── 7. 初始化 ──
+    // ── 7. 初始化与唤起 ──
     window.__pmOpen = () => {
         if (phoneActive) return;
         const c = getCtx();
         const defaultChar = c?.characters?.[c.characterId]?.name ?? 'AI';
+        
+        try { window.__pmHistories = JSON.parse(localStorage.getItem('ST_SMS_DATA_V2')) || {}; } catch(e) {}
+
         phoneWindow = document.createElement('div');
-        phoneWindow.id = 'pm-iphone-v15';
+        phoneWindow.id = 'pm-iphone-v16';
         phoneWindow.innerHTML = `
             <div class="pm-island"></div>
             <div class="pm-main-ui">
                 <div class="pm-navbar">
                     <button onclick="window.__pmShowList()" class="pm-nav-btn">≡</button>
                     <div class="pm-name">${defaultChar}</div>
-                    <button onclick="window.__pmEnd()" class="pm-nav-btn" style="color:red">✕</button>
+                    <button onclick="window.__pmEnd()" class="pm-nav-btn" style="color:#ff3b30">✕</button>
                 </div>
                 <div class="pm-msg-list"></div>
                 <div class="pm-input-bar">
@@ -225,16 +235,9 @@
     };
 
     const css = `
-        #pm-iphone-v15 {
-            position: fixed; bottom: 40px; right: 40px; width: 330px; height: 580px;
-            background: #fff; border: 10px solid #111; border-radius: 45px;
-            z-index: 100000; display: flex; flex-direction: column; overflow: hidden;
-            box-shadow: 0 20px 50px rgba(0,0,0,0.4); transition: 0.35s cubic-bezier(0.18, 0.89, 0.32, 1.2);
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-            touch-action: none;
-        }
-        #pm-iphone-v15.is-min { height: 48px; width: 130px; border-radius: 24px; border-width: 6px; }
-        #pm-iphone-v15.is-min .pm-main-ui { display: none; }
+        #pm-iphone-v16 { position: fixed; bottom: 40px; right: 40px; width: 330px; height: 580px; background: #fff; border: 10px solid #111; border-radius: 45px; z-index: 100000; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 20px 50px rgba(0,0,0,0.4); transition: 0.35s cubic-bezier(0.18, 0.89, 0.32, 1.2); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; touch-action: none; }
+        #pm-iphone-v16.is-min { height: 48px; width: 130px; border-radius: 24px; border-width: 6px; }
+        #pm-iphone-v16.is-min .pm-main-ui { display: none; }
         .pm-island { width: 100px; height: 26px; background: #000; margin: 10px auto; border-radius: 15px; cursor: move; flex-shrink: 0; touch-action: none; z-index: 10; }
         .pm-main-ui { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
         .pm-navbar { display: flex; align-items: center; justify-content: space-between; padding: 5px 15px; border-bottom: 1px solid #f2f2f7; }
@@ -244,7 +247,7 @@
         .pm-bubble { max-width: 75%; padding: 10px 15px; border-radius: 18px; font-size: 14px; line-height: 1.4; animation: pm-pop 0.3s ease-out; word-wrap: break-word; }
         .pm-right { align-self: flex-end; background: #007aff; color: #fff; border-bottom-right-radius: 4px; }
         .pm-left { align-self: flex-start; background: #e9e9eb; color: #000; border-bottom-left-radius: 4px; }
-        .pm-transfer-card { background: #ff9500; color: #fff; border-radius: 18px; padding: 12px 15px; display: flex; align-items: center; gap: 12px; min-width: 160px; }
+        .pm-transfer-card { background: #ff9500; color: #fff; border-radius: 18px; padding: 12px 15px; display: flex; align-items: center; gap: 12px; min-width: 160px; box-shadow: 0 4px 10px rgba(255,149,0,0.3); }
         .pm-t-icon { width: 36px; height: 36px; background: #fff; color: #ff9500; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 20px; font-weight: 800; }
         .pm-t-info { display: flex; flex-direction: column; }
         .pm-img-card { background: #f2f2f7; border: 1px solid #ddd; padding: 15px; border-radius: 18px; color: #666; font-size: 13px; text-align: center; }
@@ -258,21 +261,31 @@
         .pm-li i { color: #ff3b30; cursor: pointer; font-style: normal; }
     `;
 
-    if (!document.getElementById('pm-v15-css')) {
-        const s = document.createElement('style'); s.id = 'pm-v15-css'; s.innerHTML = css; document.head.appendChild(s);
+    if (!document.getElementById('pm-v16-css')) {
+        const s = document.createElement('style'); s.id = 'pm-v16-css'; s.innerHTML = css; document.head.appendChild(s);
     }
 
+    // 核心修复：极致拦截 /phone 指令，杜绝生成下一楼
     document.addEventListener('keydown', e => {
         if(e.key === 'Enter' && !e.shiftKey) {
             const ta = document.getElementById('send_textarea');
-            if(ta && ta.value.trim() === '/phone') {
-                e.preventDefault(); 
-                ta.value = ''; 
-                ta.dispatchEvent(new Event('input', { bubbles: true }));
+            if(ta && document.activeElement === ta && ta.value.trim() === '/phone') {
+                e.preventDefault();
+                e.stopImmediatePropagation(); // 拦截酒馆本体的监听器
+                ta.value = '';
                 window.__pmOpen();
             }
         }
     }, true);
 
-    console.log("iPhone SMS V15 (HTML Comment Fix) Loaded.");
+    // 双重保险：如果酒馆支持 Slash Command 注册，就注册一个原生指令
+    if (typeof window.SlashCommandParser !== 'undefined' && window.SlashCommandParser.addCommandObject) {
+        try {
+            window.SlashCommandParser.addCommandObject(
+                window.SlashCommandParser.registerCommand('phone', () => { window.__pmOpen(); return ''; }, [], 'Open Phone', true, true)
+            );
+        } catch(err) {}
+    }
+
+    console.log("iPhone SMS V16 (Logic & Intercept Fix) Loaded.");
 })();
