@@ -1,7 +1,9 @@
-import { getContext, eventSource, event_types } from '../../../../script.js';
-import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.js';
-import { SlashCommand } from '../../../slash-commands/SlashCommand.js';
-import { ARGUMENT_TYPE, SlashCommandArgument } from '../../../slash-commands/SlashCommandArgument.js';
+const { getContext, eventSource, event_types } = SillyTavern.getContext 
+    ? { getContext: SillyTavern.getContext, eventSource: SillyTavern.eventSource, event_types: SillyTavern.event_types }
+    : window;
+
+const SlashCommandParser = window.SlashCommandParser;
+const SlashCommand = window.SlashCommand;
 
 // ── 状态 ──────────────────────────────────────────────
 let phoneActive = false;
