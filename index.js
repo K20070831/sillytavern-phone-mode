@@ -46,7 +46,7 @@
         handle.addEventListener('touchstart', onStart, { passive: false }); window.addEventListener('touchmove', onMove, { passive: false }); window.addEventListener('touchend', onEnd);
     }
 
-    // ── 3. 专杀 ECoT 净化器 (放宽图片和转账的识别) ──
+    // ── 3. 专杀 ECoT 净化器 (修复贪吃蛇 Bug) ──
     function processResponse(text) {
         if (!text) return [];
         let clean = text.replace(/&lt;/g, '<').replace(/&gt;/g, '>');
@@ -55,9 +55,11 @@
         clean = clean.replace(/<[A-Za-z]+>[\s\S]*?<\/[A-Za-z]+>/g, '');
         clean = clean.replace(/\[[A-Za-z0-9_]+\]/g, '');
         clean = clean.replace(/\*[^*]+\*/g, '');
-        // 核心修复：允许 (图片: xxx) (转账: xxx) 存活，杀掉其他旁白
+        // 允许 (图片: xxx) (转账: xxx) 存活
         clean = clean.replace(/[\(（](?!\s*(转账|图片|系统))[^\)）]+[\)\）]/g, '');
-        clean = clean.replace(/^(.*?)(: |：)/gm, '');
+        
+        // 核心修复：只在文本最开头的 15 个字符内寻找冒号（防止把句子里的冒号给吞了）
+        clean = clean.replace(/^.{0,15}(:|：)\s*/, '');
         clean = clean.trim();
         
         let chunks = clean.split(/[/／]/).map(s => s.trim()).filter(s => s.length > 0);
@@ -67,13 +69,13 @@
         return chunks.slice(0, 8);
     }
 
-    // ── 4. 渲染气泡 (支持冒号和加号) ──
+    // ── 4. 渲染气泡 (图片与转账特效) ──
     function createBubbleElement(text, side) {
         const b = document.createElement('div');
         b.className = `pm-bubble pm-${side}`;
         let html = text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
         
-        // 核心修复：兼容 (图片：猫) 和 (转账+100)
+        // 匹配 (图片：猫) 和 (转账+100)
         html = html.replace(/[\(（]\s*(转账|图片)\s*[+：:\s]*([^)）]+)[\)\）]/g, (match, type, content) => {
             if (type === '转账') {
                 let amount = parseFloat(content) || 100;
@@ -90,12 +92,11 @@
         return b;
     }
 
-    // ── 5. API 呼叫 (解决身份错乱) ──
+    // ── 5. API 呼叫 (处理身份和强制切分) ──
     async function fetchSMS(userMsg) {
         const c = getCtx();
         conversationHistory.push({ role: 'user', content: userMsg });
         
-        // 核心修复：身份隔离判断
         const activeCharName = c.characters && c.characters[c.characterId] ? c.characters[c.characterId].name : '';
         let personaContext = "";
         if (currentPersona === activeCharName) {
@@ -128,7 +129,7 @@
         } catch (e) { return ["（发送失败）"]; }
     }
 
-    // ── 6. UI 交互 (解决用户输入分泡) ──
+    // ── 6. UI 交互 ──
     function addBubble(text, side) {
         const list = phoneWindow?.querySelector('.pm-msg-list');
         if (!list) return;
@@ -143,12 +144,11 @@
         if (!val) return;
         input.value = '';
         
-        // 核心修复：把用户的输入也用 / 切割出多个气泡
         const userChunks = val.split(/[/／]/).map(s => s.trim()).filter(s => s.length > 0);
         userChunks.forEach(c => addBubble(c, 'right'));
         
         isGenerating = true;
-        const sentenceList = await fetchSMS(val); // 发送完整字符串给AI以保持上下文
+        const sentenceList = await fetchSMS(val);
         for (const s of sentenceList) {
             await new Promise(r => setTimeout(r, 600));
             addBubble(s, 'left');
@@ -212,7 +212,7 @@
         try { window.__pmHistories = JSON.parse(localStorage.getItem('ST_SMS_DATA_V2')) || {}; } catch(e) {}
 
         phoneWindow = document.createElement('div');
-        phoneWindow.id = 'pm-iphone-v16';
+        phoneWindow.id = 'pm-iphone-v17';
         phoneWindow.innerHTML = `
             <div class="pm-island"></div>
             <div class="pm-main-ui">
@@ -235,9 +235,9 @@
     };
 
     const css = `
-        #pm-iphone-v16 { position: fixed; bottom: 40px; right: 40px; width: 330px; height: 580px; background: #fff; border: 10px solid #111; border-radius: 45px; z-index: 100000; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 20px 50px rgba(0,0,0,0.4); transition: 0.35s cubic-bezier(0.18, 0.89, 0.32, 1.2); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; touch-action: none; }
-        #pm-iphone-v16.is-min { height: 48px; width: 130px; border-radius: 24px; border-width: 6px; }
-        #pm-iphone-v16.is-min .pm-main-ui { display: none; }
+        #pm-iphone-v17 { position: fixed; bottom: 40px; right: 40px; width: 330px; height: 580px; background: #fff; border: 10px solid #111; border-radius: 45px; z-index: 100000; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 20px 50px rgba(0,0,0,0.4); transition: 0.35s cubic-bezier(0.18, 0.89, 0.32, 1.2); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; touch-action: none; }
+        #pm-iphone-v17.is-min { height: 48px; width: 130px; border-radius: 24px; border-width: 6px; }
+        #pm-iphone-v17.is-min .pm-main-ui { display: none; }
         .pm-island { width: 100px; height: 26px; background: #000; margin: 10px auto; border-radius: 15px; cursor: move; flex-shrink: 0; touch-action: none; z-index: 10; }
         .pm-main-ui { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
         .pm-navbar { display: flex; align-items: center; justify-content: space-between; padding: 5px 15px; border-bottom: 1px solid #f2f2f7; }
@@ -261,24 +261,22 @@
         .pm-li i { color: #ff3b30; cursor: pointer; font-style: normal; }
     `;
 
-    if (!document.getElementById('pm-v16-css')) {
-        const s = document.createElement('style'); s.id = 'pm-v16-css'; s.innerHTML = css; document.head.appendChild(s);
+    if (!document.getElementById('pm-v17-css')) {
+        const s = document.createElement('style'); s.id = 'pm-v17-css'; s.innerHTML = css; document.head.appendChild(s);
     }
 
-    // 核心修复：极致拦截 /phone 指令，杜绝生成下一楼
     document.addEventListener('keydown', e => {
         if(e.key === 'Enter' && !e.shiftKey) {
             const ta = document.getElementById('send_textarea');
             if(ta && document.activeElement === ta && ta.value.trim() === '/phone') {
                 e.preventDefault();
-                e.stopImmediatePropagation(); // 拦截酒馆本体的监听器
+                e.stopImmediatePropagation();
                 ta.value = '';
                 window.__pmOpen();
             }
         }
     }, true);
 
-    // 双重保险：如果酒馆支持 Slash Command 注册，就注册一个原生指令
     if (typeof window.SlashCommandParser !== 'undefined' && window.SlashCommandParser.addCommandObject) {
         try {
             window.SlashCommandParser.addCommandObject(
@@ -287,5 +285,5 @@
         } catch(err) {}
     }
 
-    console.log("iPhone SMS V16 (Logic & Intercept Fix) Loaded.");
+    console.log("iPhone SMS V17 (Colon Bug Fixed) Loaded.");
 })();
