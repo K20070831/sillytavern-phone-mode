@@ -1,6 +1,10 @@
 (async function () {
     await new Promise(r => setTimeout(r, 1000));
 
+    // ── 可调常量 ──
+    const SAVE_LIMIT = 60;      // 每个联系人最多保存多少条短信（持久化）
+    const CONTEXT_LIMIT = 15;   // 每次发送给 AI 的最近上下文条数
+
     window.__pmHistories = window.__pmHistories || {};
     window.__pmConfig = window.__pmConfig || { apiUrl: '', apiKey: '', model: '', useIndependent: false };
     window.__pmProfiles = window.__pmProfiles || [];
@@ -15,7 +19,7 @@
 
     const getCtx = () => typeof SillyTavern !== 'undefined' ? SillyTavern.getContext() : null;
 
-    // ── URL 归一化（宽松判定） ──
+    // ── URL 归一化 ──
     function normalizeApiUrls(input) {
         let url = (input || '').trim().replace(/\/+$/, '');
         if (!url) return { chatUrl: '', modelsUrl: '' };
@@ -71,7 +75,6 @@
     window.__pmSetMode = (useIndependent) => {
         window.__pmConfig.useIndependent = !!useIndependent;
         try { localStorage.setItem('ST_SMS_CONFIG', JSON.stringify(window.__pmConfig)); } catch {}
-
         const main = document.getElementById('pm-mode-main');
         const indep = document.getElementById('pm-mode-indep');
         const tip = document.getElementById('pm-mode-tip');
@@ -86,7 +89,7 @@
         }
     };
 
-    // ── 统一抓取角色卡 + 世界书 + 主楼历史 ──
+    // ── 抓取上下文 ──
     async function gatherContext() {
         const c = getCtx();
         const char = c?.characters?.[c.characterId] || {};
@@ -225,7 +228,7 @@
             mainChatText, worldBookText,
         } = ctxData;
 
-        const smsHistoryText = conversationHistory.slice(-8).map(m =>
+        const smsHistoryText = conversationHistory.slice(-CONTEXT_LIMIT).map(m =>
             m.role === 'user' ? `用户：${cleanMsg(m.content)}` : `${currentPersona}：${cleanMsg(m.content)}`
         ).join('\n');
 
@@ -261,7 +264,6 @@ ${currentPersona}：`;
         try {
             let raw = '';
             const cfg = window.__pmConfig;
-            // 关键：只有显式开启"独立API"且配置完整时才走独立通道
             const useIndep = cfg.useIndependent && cfg.apiUrl && cfg.apiKey;
 
             if (useIndep) {
@@ -280,7 +282,7 @@ ${currentPersona}：`;
 
                 const messages = [
                     { role: 'system', content: systemPrompt },
-                    ...conversationHistory.slice(-8).map(m => ({
+                    ...conversationHistory.slice(-CONTEXT_LIMIT).map(m => ({
                         role: m.role,
                         content: cleanMsg(m.content)
                     }))
@@ -325,7 +327,7 @@ ${currentPersona}：`;
 
             const id = `${c.characterId}_${c.chat_file || 'default'}`;
             if (!window.__pmHistories[id]) window.__pmHistories[id] = {};
-            window.__pmHistories[id][currentPersona] = conversationHistory.slice(-30);
+            window.__pmHistories[id][currentPersona] = conversationHistory.slice(-SAVE_LIMIT);
             try { localStorage.setItem('ST_SMS_DATA_V2', JSON.stringify(window.__pmHistories)); } catch {}
 
             return sentences;
@@ -459,7 +461,7 @@ ${currentPersona}：`;
             const c = getCtx();
             const id = `${c.characterId}_${c.chat_file || 'default'}`;
             if (!window.__pmHistories[id]) window.__pmHistories[id] = {};
-            window.__pmHistories[id][currentPersona] = conversationHistory.slice(-30);
+            window.__pmHistories[id][currentPersona] = conversationHistory.slice(-SAVE_LIMIT);
             try { localStorage.setItem('ST_SMS_DATA_V2', JSON.stringify(window.__pmHistories)); } catch {}
         }
 
@@ -695,7 +697,6 @@ ${currentPersona}：`;
             const saved = JSON.parse(localStorage.getItem('ST_SMS_CONFIG'));
             window.__pmConfig = saved || { apiUrl: '', apiKey: '', model: '', useIndependent: false };
             if (typeof window.__pmConfig.useIndependent === 'undefined') {
-                // 兼容旧版本：之前只要填了就走独立API，迁移一次
                 window.__pmConfig.useIndependent = !!(window.__pmConfig.apiUrl && window.__pmConfig.apiKey);
             }
         } catch { window.__pmConfig = { apiUrl: '', apiKey: '', model: '', useIndependent: false }; }
@@ -927,8 +928,6 @@ ${currentPersona}：`;
     box-sizing: border-box;
 }
 .pm-cfg-tip { font-size: 11px; color: #aaa; text-align: center; padding: 4px 0; }
-
-/* 模式切换 */
 .pm-mode-switch {
     display: flex; background: #f0f0f3; border-radius: 12px;
     padding: 3px; gap: 3px;
@@ -945,8 +944,6 @@ ${currentPersona}：`;
     background: #fff; color: #007aff !important;
     box-shadow: 0 2px 6px rgba(0,0,0,0.08);
 }
-
-/* 已保存档案 */
 .pm-prof-list {
     max-height: 130px; overflow-y: auto;
     border: 1px solid #eee; border-radius: 10px;
@@ -986,6 +983,56 @@ ${currentPersona}：`;
         document.head.appendChild(s);
     }
 
+    // ── 注册 Slash Command（关键改动） ──
+    function registerPhoneCommand() {
+        const ctx = getCtx();
+        if (!ctx) return false;
+
+        const callback = () => {
+            try { window.__pmOpen(); } catch (e) { console.error('[phone-mode] 打开失败', e); }
+            return ''; // 返回空串避免在聊天里留下脏消息
+        };
+
+        // 新版酒馆：SlashCommandParser
+        try {
+            const SCP = window.SlashCommandParser
+                || ctx.SlashCommandParser
+                || (window.SillyTavern && window.SillyTavern.libs && window.SillyTavern.libs.SlashCommandParser);
+            const SC = window.SlashCommand || ctx.SlashCommand;
+            if (SCP && SC && typeof SCP.addCommandObject === 'function' && typeof SC.fromProps === 'function') {
+                SCP.addCommandObject(SC.fromProps({
+                    name: 'phone',
+                    callback: callback,
+                    helpString: '打开短信小手机界面',
+                }));
+                console.log('[phone-mode] /phone 已注册（新版 SlashCommandParser）');
+                return true;
+            }
+        } catch (e) { console.warn('[phone-mode] 新版命令注册失败，尝试旧版', e); }
+
+        // 旧版酒馆：registerSlashCommand
+        try {
+            if (typeof ctx.registerSlashCommand === 'function') {
+                ctx.registerSlashCommand('phone', callback, [], '打开短信小手机界面', true, true);
+                console.log('[phone-mode] /phone 已注册（旧版 registerSlashCommand）');
+                return true;
+            }
+        } catch (e) { console.warn('[phone-mode] 旧版命令注册失败', e); }
+
+        return false;
+    }
+
+    // 立即尝试注册，失败则轮询重试（应对脚本比酒馆早加载的情况）
+    let registered = registerPhoneCommand();
+    if (!registered) {
+        let tries = 0;
+        const timer = setInterval(() => {
+            tries++;
+            if (registerPhoneCommand() || tries >= 30) clearInterval(timer);
+        }, 500);
+    }
+
+    // ── 兜底 1：keydown 拦截手动回车 ──
     document.addEventListener('keydown', e => {
         if (e.key !== 'Enter' || e.shiftKey) return;
         const ta = document.getElementById('send_textarea');
@@ -998,5 +1045,19 @@ ${currentPersona}：`;
         }
     }, true);
 
-    console.log('[phone-mode] 已加载，输入 /phone 回车召唤');
+    // ── 兜底 2：拦截发送按钮点击（用于命令注册失败的旧版本） ──
+    document.addEventListener('click', e => {
+        const btn = e.target.closest && e.target.closest('#send_but');
+        if (!btn) return;
+        const ta = document.getElementById('send_textarea');
+        if (!ta) return;
+        if (ta.value.trim() === '/phone') {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            ta.value = '';
+            window.__pmOpen();
+        }
+    }, true);
+
+    console.log('[phone-mode] 已加载，/phone 可在 输入栏 / QR / 发送按钮 中使用');
 })();
