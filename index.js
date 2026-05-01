@@ -2,7 +2,8 @@
     await new Promise(r => setTimeout(r, 1000));
 
     window.__pmHistories = window.__pmHistories || {};
-    window.__pmConfig = window.__pmConfig || { apiUrl: '', apiKey: '', model: '' };
+    window.__pmConfig = window.__pmConfig || { apiUrl: '', apiKey: '', model: '', useIndependent: false };
+    window.__pmProfiles = window.__pmProfiles || [];
 
     let phoneActive = false;
     let phoneWindow = null;
@@ -18,21 +19,72 @@
     function normalizeApiUrls(input) {
         let url = (input || '').trim().replace(/\/+$/, '');
         if (!url) return { chatUrl: '', modelsUrl: '' };
-        // 已经是完整聊天地址
         if (/\/chat\/completions$/i.test(url)) {
             return { chatUrl: url, modelsUrl: url.replace(/\/chat\/completions$/i, '/models') };
         }
-        // 已经是 /models
         if (/\/models$/i.test(url)) {
             return { chatUrl: url.replace(/\/models$/i, '/chat/completions'), modelsUrl: url };
         }
-        // 以 /v数字 结尾（如 /v1、/v2、/api/v1）
         if (/\/v\d+$/i.test(url)) {
             return { chatUrl: url + '/chat/completions', modelsUrl: url + '/models' };
         }
-        // 裸域名 → 自动补 /v1
         return { chatUrl: url + '/v1/chat/completions', modelsUrl: url + '/v1/models' };
     }
+
+    // ── 档案存取 ──
+    function loadProfiles() {
+        try { window.__pmProfiles = JSON.parse(localStorage.getItem('ST_SMS_API_PROFILES')) || []; }
+        catch { window.__pmProfiles = []; }
+    }
+    function saveProfiles() {
+        try { localStorage.setItem('ST_SMS_API_PROFILES', JSON.stringify(window.__pmProfiles)); } catch {}
+    }
+    function addOrUpdateProfile(p) {
+        if (!p.apiUrl || !p.apiKey) return;
+        const idx = window.__pmProfiles.findIndex(x => x.apiUrl === p.apiUrl && x.apiKey === p.apiKey);
+        if (idx >= 0) {
+            window.__pmProfiles[idx] = { ...window.__pmProfiles[idx], ...p, savedAt: Date.now() };
+        } else {
+            window.__pmProfiles.push({ ...p, savedAt: Date.now() });
+        }
+        saveProfiles();
+    }
+    window.__pmDeleteProfile = (idx) => {
+        window.__pmProfiles.splice(idx, 1);
+        saveProfiles();
+        window.__pmShowConfig();
+    };
+    window.__pmPickProfile = (idx) => {
+        const p = window.__pmProfiles[idx];
+        if (!p) return;
+        document.getElementById('pm-cfg-url').value = p.apiUrl || '';
+        document.getElementById('pm-cfg-key').value = p.apiKey || '';
+        document.getElementById('pm-cfg-model').value = p.model || '';
+        const status = document.getElementById('pm-api-status');
+        if (status) {
+            status.textContent = '✅ 已载入档案，点击"连接并获取模型"或直接保存';
+            status.style.color = '#34c759';
+        }
+    };
+
+    // ── 模式切换 ──
+    window.__pmSetMode = (useIndependent) => {
+        window.__pmConfig.useIndependent = !!useIndependent;
+        try { localStorage.setItem('ST_SMS_CONFIG', JSON.stringify(window.__pmConfig)); } catch {}
+
+        const main = document.getElementById('pm-mode-main');
+        const indep = document.getElementById('pm-mode-indep');
+        const tip = document.getElementById('pm-mode-tip');
+        if (main && indep) {
+            main.classList.toggle('pm-mode-active', !useIndependent);
+            indep.classList.toggle('pm-mode-active', !!useIndependent);
+        }
+        if (tip) {
+            tip.textContent = useIndependent
+                ? '🔌 当前：独立API（绕过酒馆，使用下方配置）'
+                : '🏠 当前：主API（走酒馆预设）';
+        }
+    };
 
     // ── 统一抓取角色卡 + 世界书 + 主楼历史 ──
     async function gatherContext() {
@@ -44,7 +96,6 @@
         const cardFirstMes    = char.first_mes ?? '';
         const cardMesExample  = char.mes_example ?? '';
 
-        // 主楼最近 8 条聊天（清洗）
         const cleanMsg = (s) => (s || '')
             .replace(/```[\s\S]*?```/g, '')
             .replace(/<[^>]+>[\s\S]*?<\/[^>]+>/g, '')
@@ -59,7 +110,6 @@
 
         const mainChatText = mainChatArr.map(m => `${m.who}：${m.content}`).join('\n');
 
-        // 真·世界书
         let worldBookText = '';
         try {
             if (typeof c?.getWorldInfoPrompt === 'function') {
@@ -169,19 +219,16 @@
             .replace(/<[^>]+>/g, '')
             .trim();
 
-        // 统一抓取上下文
         const ctxData = await gatherContext();
         const {
             cardDesc, cardPersonality, cardScenario, cardFirstMes, cardMesExample,
-            mainChatArr, mainChatText, worldBookText,
+            mainChatText, worldBookText,
         } = ctxData;
 
-        // 短信内部最近 8 条
         const smsHistoryText = conversationHistory.slice(-8).map(m =>
             m.role === 'user' ? `用户：${cleanMsg(m.content)}` : `${currentPersona}：${cleanMsg(m.content)}`
         ).join('\n');
 
-        // 通用上下文文本块（主 API 用）
         const contextBlock = [
             cardScenario    ? `【场景】\n${cardScenario}` : '',
             cardFirstMes    ? `【开场白】\n${cardFirstMes}` : '',
@@ -214,9 +261,10 @@ ${currentPersona}：`;
         try {
             let raw = '';
             const cfg = window.__pmConfig;
+            // 关键：只有显式开启"独立API"且配置完整时才走独立通道
+            const useIndep = cfg.useIndependent && cfg.apiUrl && cfg.apiKey;
 
-            if (cfg.apiUrl && cfg.apiKey) {
-                // ── 独立 API ──
+            if (useIndep) {
                 const systemPrompt = [
                     `你正在扮演"${currentPersona}"通过手机短信与用户聊天。`,
                     cardDesc        ? `【角色设定】\n${cardDesc}` : '',
@@ -256,7 +304,6 @@ ${currentPersona}：`;
                 raw = json.choices?.[0]?.message?.content ?? '';
 
             } else {
-                // ── 主 API（走酒馆预设 + 注入额外上下文） ──
                 raw = await c.generateQuietPrompt(injectedInstruction, false, false);
             }
 
@@ -289,7 +336,7 @@ ${currentPersona}：`;
     }
 
     // ── 气泡操作 ──
-    function addBubble(text, side, save = true) {
+    function addBubble(text, side) {
         const list = phoneWindow?.querySelector('.pm-msg-list');
         if (!list) return;
         createBubbles(text, side).forEach(b => {
@@ -323,7 +370,6 @@ ${currentPersona}：`;
 
     function hideTyping() { document.getElementById('pm-typing')?.remove(); }
 
-    // ── 发送 ──
     window.__pmSend = async () => {
         if (isGenerating) return;
         const input = phoneWindow.querySelector('.pm-input');
@@ -354,7 +400,6 @@ ${currentPersona}：`;
         input.focus();
     };
 
-    // ── 删除模式 ──
     window.__pmToggleSelect = () => {
         isSelectMode = !isSelectMode;
         const list = phoneWindow?.querySelector('.pm-msg-list');
@@ -428,24 +473,63 @@ ${currentPersona}：`;
     // ── API 配置弹窗 ──
     window.__pmShowConfig = () => {
         document.getElementById('pm-overlay')?.remove();
+        loadProfiles();
         const cfg = window.__pmConfig;
+
+        const shortUrl = (u) => (u || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
+        const maskKey = (k) => {
+            if (!k) return '';
+            if (k.length <= 8) return '****';
+            return k.slice(0, 4) + '****' + k.slice(-4);
+        };
+
+        const profilesHtml = window.__pmProfiles.length > 0
+            ? window.__pmProfiles.map((p, i) => `
+                <div class="pm-prof-li">
+                    <div class="pm-prof-info" onclick="window.__pmPickProfile(${i})">
+                        <div class="pm-prof-url">${shortUrl(p.apiUrl)}</div>
+                        <div class="pm-prof-meta">${maskKey(p.apiKey)}${p.model ? ' · ' + p.model : ''}</div>
+                    </div>
+                    <i class="pm-prof-del" onclick="window.__pmDeleteProfile(${i})">✕</i>
+                </div>`).join('')
+            : '<div class="pm-prof-empty">暂无已保存档案，连接成功后会自动保存</div>';
+
+        const useIndep = !!cfg.useIndependent;
+        const modeTip = useIndep
+            ? '🔌 当前：独立API（绕过酒馆，使用下方配置）'
+            : '🏠 当前：主API（走酒馆预设）';
+
         const ov = document.createElement('div');
         ov.id = 'pm-overlay';
         ov.innerHTML = `
-<div class="pm-modal">
+<div class="pm-modal pm-modal-wide">
   <div class="pm-modal-header">
     <b>API 配置</b>
     <span onclick="document.getElementById('pm-overlay').remove()" class="pm-modal-close">✕</span>
   </div>
-  <div style="padding:14px 16px;display:flex;flex-direction:column;gap:10px;">
-    <div class="pm-cfg-label">API 地址（支持裸域名 / /v1 / /v1/chat/completions）</div>
-    <input id="pm-cfg-url" class="pm-cfg-input" placeholder="https://api.xxx.com 或 .../v1 或 .../v1/chat/completions" value="${cfg.apiUrl}">
-    <div class="pm-cfg-label">API Key</div>
-    <input id="pm-cfg-key" class="pm-cfg-input" placeholder="sk-..." type="text" value="${cfg.apiKey}" maxlength="999">
-    <div class="pm-cfg-label">模型名称</div>
-    <input id="pm-cfg-model" class="pm-cfg-input" placeholder="可手动输入，或点击下方按钮拉取" value="${cfg.model}" list="pm-model-list">
-    <datalist id="pm-model-list"></datalist>
-    <div id="pm-api-status" class="pm-cfg-tip" style="font-weight:bold;">配置独立API后，手机聊天与主聊天互不干扰</div>
+  <div class="pm-modal-scroll">
+    <div style="padding:12px 14px 6px;">
+      <div class="pm-cfg-label" style="margin-bottom:6px;">⚡ API 模式</div>
+      <div class="pm-mode-switch">
+        <div id="pm-mode-main" class="pm-mode-opt ${!useIndep ? 'pm-mode-active' : ''}" onclick="window.__pmSetMode(false)">🏠 主API</div>
+        <div id="pm-mode-indep" class="pm-mode-opt ${useIndep ? 'pm-mode-active' : ''}" onclick="window.__pmSetMode(true)">🔌 独立API</div>
+      </div>
+      <div id="pm-mode-tip" class="pm-cfg-tip" style="text-align:left;padding:6px 2px 0;">${modeTip}</div>
+    </div>
+    <div style="padding:6px 14px 4px;border-top:1px solid #f0f0f0;">
+      <div class="pm-cfg-label" style="margin:8px 0 6px;">📚 已保存档案（点击载入）</div>
+      <div class="pm-prof-list">${profilesHtml}</div>
+    </div>
+    <div style="padding:10px 16px;display:flex;flex-direction:column;gap:10px;border-top:1px solid #f0f0f0;">
+      <div class="pm-cfg-label">API 地址（支持裸域名 / /v1 / /v1/chat/completions）</div>
+      <input id="pm-cfg-url" class="pm-cfg-input" placeholder="https://api.xxx.com 或 .../v1" value="${cfg.apiUrl || ''}">
+      <div class="pm-cfg-label">API Key</div>
+      <input id="pm-cfg-key" class="pm-cfg-input" placeholder="sk-..." type="text" value="${cfg.apiKey || ''}" maxlength="999">
+      <div class="pm-cfg-label">模型名称</div>
+      <input id="pm-cfg-model" class="pm-cfg-input" placeholder="可手动输入，或点击下方按钮拉取" value="${cfg.model || ''}" list="pm-model-list">
+      <datalist id="pm-model-list"></datalist>
+      <div id="pm-api-status" class="pm-cfg-tip" style="font-weight:bold;">连接成功后会自动保存档案</div>
+    </div>
   </div>
   <div class="pm-modal-add" style="display:flex;gap:8px;">
     <button onclick="window.__pmTestApi()" style="flex:1;background:#ff9500;color:#fff;border:none;border-radius:10px;padding:10px;font-size:13px;cursor:pointer;font-weight:600;">连接并获取模型</button>
@@ -459,6 +543,7 @@ ${currentPersona}：`;
     window.__pmTestApi = async () => {
         const urlInput = document.getElementById('pm-cfg-url').value.trim();
         const keyInput = document.getElementById('pm-cfg-key').value.trim();
+        const modelInput = document.getElementById('pm-cfg-model').value.trim();
         const status = document.getElementById('pm-api-status');
 
         if (!urlInput) { status.textContent = "❌ 请先填写 API 地址！"; status.style.color = "#ff3b30"; return; }
@@ -476,12 +561,14 @@ ${currentPersona}：`;
             if (data && data.data && Array.isArray(data.data)) {
                 const list = document.getElementById('pm-model-list');
                 list.innerHTML = data.data.map(m => `<option value="${m.id}">`).join('');
-                status.textContent = `✅ 连接成功！获取到 ${data.data.length} 个模型，请下拉选择`;
+                status.textContent = `✅ 连接成功！获取到 ${data.data.length} 个模型，已保存档案`;
                 status.style.color = "#34c759";
             } else {
-                status.textContent = "✅ 连接成功！(但该接口不返回模型列表，请手动输入)";
+                status.textContent = "✅ 连接成功！(接口不返回模型列表，请手动输入) 已保存档案";
                 status.style.color = "#34c759";
             }
+
+            addOrUpdateProfile({ apiUrl: urlInput, apiKey: keyInput, model: modelInput });
         } catch (err) {
             status.textContent = "❌ 连接失败：" + err.message;
             status.style.color = "#ff3b30";
@@ -489,19 +576,26 @@ ${currentPersona}：`;
     };
 
     window.__pmSaveConfig = () => {
+        const apiUrl = document.getElementById('pm-cfg-url')?.value.trim() ?? '';
+        const apiKey = document.getElementById('pm-cfg-key')?.value.trim() ?? '';
+        const model  = document.getElementById('pm-cfg-model')?.value.trim() ?? '';
+
         window.__pmConfig = {
-            apiUrl: document.getElementById('pm-cfg-url')?.value.trim() ?? '',
-            apiKey: document.getElementById('pm-cfg-key')?.value.trim() ?? '',
-            model: document.getElementById('pm-cfg-model')?.value.trim() ?? '',
+            apiUrl, apiKey, model,
+            useIndependent: !!window.__pmConfig.useIndependent,
         };
         try { localStorage.setItem('ST_SMS_CONFIG', JSON.stringify(window.__pmConfig)); } catch {}
+
+        if (apiUrl && apiKey) addOrUpdateProfile({ apiUrl, apiKey, model });
+
         document.getElementById('pm-overlay')?.remove();
 
         const list = phoneWindow?.querySelector('.pm-msg-list');
         if (list) {
+            const useIndep = window.__pmConfig.useIndependent && window.__pmConfig.apiUrl && window.__pmConfig.apiKey;
             const n = document.createElement('div');
             n.className = 'pm-note';
-            n.textContent = `已保存，当前使用：${window.__pmConfig.apiUrl ? '独立API' : '主API'}`;
+            n.textContent = `已保存，当前使用：${useIndep ? '独立API' : '主API'}`;
             list.appendChild(n);
             list.scrollTop = list.scrollHeight;
         }
@@ -545,7 +639,6 @@ ${currentPersona}：`;
         }, 0);
     };
 
-    // ── 切换角色 ──
     window.__pmSwitch = (name) => {
         if (!name?.trim()) return;
         name = name.trim();
@@ -592,14 +685,21 @@ ${currentPersona}：`;
         isSelectMode = false;
     };
 
-    // ── 构建窗口 ──
     window.__pmOpen = () => {
         if (phoneActive && phoneWindow) {
             phoneWindow.style.display = 'flex';
             return;
         }
         try { window.__pmHistories = JSON.parse(localStorage.getItem('ST_SMS_DATA_V2')) || {}; } catch {}
-        try { window.__pmConfig = JSON.parse(localStorage.getItem('ST_SMS_CONFIG')) || { apiUrl: '', apiKey: '', model: '' }; } catch {}
+        try {
+            const saved = JSON.parse(localStorage.getItem('ST_SMS_CONFIG'));
+            window.__pmConfig = saved || { apiUrl: '', apiKey: '', model: '', useIndependent: false };
+            if (typeof window.__pmConfig.useIndependent === 'undefined') {
+                // 兼容旧版本：之前只要填了就走独立API，迁移一次
+                window.__pmConfig.useIndependent = !!(window.__pmConfig.apiUrl && window.__pmConfig.apiKey);
+            }
+        } catch { window.__pmConfig = { apiUrl: '', apiKey: '', model: '', useIndependent: false }; }
+        loadProfiles();
 
         const c = getCtx();
         const defaultChar = c?.characters?.[c.characterId]?.name ?? 'AI';
@@ -704,16 +804,12 @@ ${currentPersona}：`;
     display: flex; flex-direction: column; gap: 7px;
     background: #fff; min-height: 0; box-sizing: border-box;
 }
-.pm-select-wrap {
-    display: flex; align-items: flex-end; gap: 6px;
-}
+.pm-select-wrap { display: flex; align-items: flex-end; gap: 6px; }
 .pm-checkbox {
     width: 20px; height: 20px; cursor: pointer;
     flex-shrink: 0; margin-bottom: 4px;
-    accent-color: #007aff;
-    border-radius: 50%;
-    opacity: 0.4;
-    transition: opacity 0.15s;
+    accent-color: #007aff; border-radius: 50%;
+    opacity: 0.4; transition: opacity 0.15s;
 }
 .pm-checkbox:checked { opacity: 1; }
 .pm-bubble {
@@ -785,10 +881,12 @@ ${currentPersona}：`;
 }
 .pm-modal {
     background: #fff; border-radius: 20px; width: 290px;
-    max-height: 480px; display: flex; flex-direction: column;
+    max-height: 85vh; display: flex; flex-direction: column;
     overflow: hidden; box-shadow: 0 16px 48px rgba(0,0,0,0.28);
     font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif;
 }
+.pm-modal-wide { width: 320px; max-height: 85vh; }
+.pm-modal-scroll { flex: 1; overflow-y: auto; min-height: 0; }
 .pm-modal-header {
     display: flex; justify-content: space-between; align-items: center;
     padding: 16px 18px 12px; border-bottom: 1px solid #f0f0f0; flex-shrink: 0;
@@ -829,11 +927,65 @@ ${currentPersona}：`;
     box-sizing: border-box;
 }
 .pm-cfg-tip { font-size: 11px; color: #aaa; text-align: center; padding: 4px 0; }
+
+/* 模式切换 */
+.pm-mode-switch {
+    display: flex; background: #f0f0f3; border-radius: 12px;
+    padding: 3px; gap: 3px;
+}
+.pm-mode-opt {
+    flex: 1; text-align: center;
+    padding: 9px 0; font-size: 13px; font-weight: 600;
+    color: #888; cursor: pointer; border-radius: 9px;
+    transition: all 0.2s;
+    user-select: none;
+}
+.pm-mode-opt:hover { color: #555; }
+.pm-mode-active {
+    background: #fff; color: #007aff !important;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+}
+
+/* 已保存档案 */
+.pm-prof-list {
+    max-height: 130px; overflow-y: auto;
+    border: 1px solid #eee; border-radius: 10px;
+    background: #fafafa; padding: 4px;
+}
+.pm-prof-li {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 9px; border-radius: 8px;
+    transition: background 0.15s;
+}
+.pm-prof-li:hover { background: #fff; }
+.pm-prof-info {
+    flex: 1; min-width: 0; cursor: pointer;
+    display: flex; flex-direction: column; gap: 2px;
+}
+.pm-prof-url {
+    font-size: 12px; color: #007aff; font-weight: 600;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.pm-prof-meta {
+    font-size: 10px; color: #999;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.pm-prof-del {
+    font-style: normal; font-size: 12px; color: #ff3b30;
+    background: #fff; border: 1px solid #ffd0cc;
+    width: 22px; height: 22px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; flex-shrink: 0; font-weight: 600;
+}
+.pm-prof-del:hover { background: #ff3b30; color: #fff; border-color: #ff3b30; }
+.pm-prof-empty {
+    text-align: center; color: #aaa; font-size: 12px;
+    padding: 14px 0;
+}
         `;
         document.head.appendChild(s);
     }
 
-    // ── 拦截 /phone ──
     document.addEventListener('keydown', e => {
         if (e.key !== 'Enter' || e.shiftKey) return;
         const ta = document.getElementById('send_textarea');
