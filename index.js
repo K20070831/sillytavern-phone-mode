@@ -603,8 +603,15 @@ ${currentPersona}：`;
     display: flex; align-items: flex-end; gap: 6px;
 }
 .pm-checkbox {
-    width: 18px; height: 18px; cursor: pointer;
-    flex-shrink: 0; margin-bottom: 4px; accent-color: #007aff;
+    width: 20px; height: 20px; cursor: pointer;
+    flex-shrink: 0; margin-bottom: 4px;
+    accent-color: #007aff;
+    border-radius: 50%;
+    opacity: 0.4;
+    transition: opacity 0.15s;
+}
+.pm-checkbox:checked {
+    opacity: 1;
 }
 .pm-bubble {
     max-width: 74%; padding: 9px 13px; border-radius: 18px;
