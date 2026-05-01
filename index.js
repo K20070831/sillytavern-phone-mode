@@ -360,7 +360,7 @@ ${currentPersona}：`;
         if (trashBtn) trashBtn.style.color = '';
         if (confirmBar) confirmBar.style.display = 'none';
     };
-
+    
     // ── API 配置弹窗 ──
     window.__pmShowConfig = () => {
         document.getElementById('pm-overlay')?.remove();
@@ -374,20 +374,55 @@ ${currentPersona}：`;
     <span onclick="document.getElementById('pm-overlay').remove()" class="pm-modal-close">✕</span>
   </div>
   <div style="padding:14px 16px;display:flex;flex-direction:column;gap:10px;">
-    <div class="pm-cfg-label">API 地址（留空则使用主API）</div>
+    <div class="pm-cfg-label">API 地址（如 .../v1/chat/completions）</div>
     <input id="pm-cfg-url" class="pm-cfg-input" placeholder="https://api.openai.com/v1/chat/completions" value="${cfg.apiUrl}">
     <div class="pm-cfg-label">API Key</div>
     <input id="pm-cfg-key" class="pm-cfg-input" placeholder="sk-..." type="password" value="${cfg.apiKey}">
     <div class="pm-cfg-label">模型名称</div>
-    <input id="pm-cfg-model" class="pm-cfg-input" placeholder="gpt-4o-mini" value="${cfg.model}">
-    <div class="pm-cfg-tip">配置独立API后，手机聊天与主聊天互不干扰</div>
+    <input id="pm-cfg-model" class="pm-cfg-input" placeholder="可手动输入，或点击测速拉取" value="${cfg.model}" list="pm-model-list">
+    <datalist id="pm-model-list"></datalist>
+    <div id="pm-api-status" class="pm-cfg-tip" style="font-weight:bold;">配置独立API后，手机聊天与主聊天互不干扰</div>
   </div>
-  <div class="pm-modal-add">
-    <button onclick="window.__pmSaveConfig()" style="width:100%;background:#007aff;color:#fff;border:none;border-radius:10px;padding:11px;font-size:14px;cursor:pointer;font-weight:600;font-family:inherit;">保存</button>
+  <div class="pm-modal-add" style="display:flex;gap:8px;">
+    <button onclick="window.__pmTestApi()" style="flex:1;background:#ff9500;color:#fff;border:none;border-radius:10px;padding:10px;font-size:13px;cursor:pointer;font-weight:600;">连接并获取模型</button>
+    <button onclick="window.__pmSaveConfig()" style="flex:1;background:#007aff;color:#fff;border:none;border-radius:10px;padding:10px;font-size:13px;cursor:pointer;font-weight:600;">保存</button>
   </div>
 </div>`;
         ov.addEventListener('click', e => { if (e.target === ov) ov.remove(); });
         document.body.appendChild(ov);
+    };
+
+    window.__pmTestApi = async () => {
+        const urlInput = document.getElementById('pm-cfg-url').value.trim();
+        const keyInput = document.getElementById('pm-cfg-key').value.trim();
+        const status = document.getElementById('pm-api-status');
+        
+        if (!urlInput) { status.textContent = "❌ 请先填写 API 地址！"; status.style.color = "#ff3b30"; return; }
+        
+        status.textContent = "正在测试连接并拉取模型..."; 
+        status.style.color = "#007aff";
+        
+        // 自动把 chat/completions 替换为 models 接口以拉取模型
+        const modelsUrl = urlInput.replace(/\/chat\/completions\/?$/, '/models');
+        
+        try {
+            const res = await fetch(modelsUrl, { method: 'GET', headers: { 'Authorization': `Bearer ${keyInput}` } });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const data = await res.json();
+            
+            if (data && data.data && Array.isArray(data.data)) {
+                const list = document.getElementById('pm-model-list');
+                list.innerHTML = data.data.map(m => `<option value="${m.id}">`).join('');
+                status.textContent = "✅ 连接成功！请在上方输入框下拉选择模型"; 
+                status.style.color = "#34c759";
+            } else {
+                status.textContent = "✅ 连接成功！(但该接口不支持拉取模型表，请手动输入)";
+                status.style.color = "#34c759";
+            }
+        } catch (err) {
+            status.textContent = "❌ 连接失败：" + err.message;
+            status.style.color = "#ff3b30";
+        }
     };
 
     window.__pmSaveConfig = () => {
@@ -398,8 +433,15 @@ ${currentPersona}：`;
         };
         try { localStorage.setItem('ST_SMS_CONFIG', JSON.stringify(window.__pmConfig)); } catch {}
         document.getElementById('pm-overlay')?.remove();
-        const using = window.__pmConfig.apiUrl ? '独立API' : '主API';
-        addNote(`已保存，当前使用：${using}`);
+        
+        const list = phoneWindow?.querySelector('.pm-msg-list');
+        if (list) {
+            const n = document.createElement('div');
+            n.className = 'pm-note';
+            n.textContent = `已保存，当前使用：${window.__pmConfig.apiUrl ? '独立API' : '主API'}`;
+            list.appendChild(n);
+            list.scrollTop = list.scrollHeight;
+        }
     };
 
     // ── 联系人弹窗 ──
