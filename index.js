@@ -86,6 +86,8 @@
 - 只输出短信文字，3到8句，每句用 / 分隔
 - 禁止旁白、心理描写、场景描述、角色名前缀
 - 禁止任何标签或格式符号
+- 禁止输出选项、分支、ABCD选择题、走向提示
+- 禁止输出任何超出短信内容本身的附加内容
 - 特殊格式仅限：(转账+金额) 或 (图片+描述)
 - 示例：你来了啊 / 我刚吃完饭 / 等你好久了
 
@@ -178,7 +180,7 @@ ${currentPersona}：`;
         hideTyping();
 
         for (const s of sentences) {
-            await new Promise(r => setTimeout(r, 400));
+            await new Promise(r => setTimeout(r, 150));
             addBubble(s, 'left');
         }
 
