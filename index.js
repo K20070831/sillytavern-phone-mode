@@ -507,7 +507,7 @@ ${currentPersona}：`;
   <div class="pm-navbar">
     <button onclick="window.__pmShowList()" class="pm-nav-btn" title="联系人">☰</button>
     <div class="pm-name">${defaultChar}</div>
-    <div style="display:flex;gap:2px;">
+    <div style="display:flex;gap:2px;justify-content:flex-end;">
       <button onclick="window.__pmToggleSelect()" class="pm-nav-btn pm-trash-btn" title="删除消息">🗑</button>
       <button onclick="window.__pmShowConfig()" class="pm-nav-btn" title="API设置">⚙</button>
       <button onclick="window.__pmEnd()" class="pm-nav-btn" style="color:#ff3b30" title="关闭">✕</button>
