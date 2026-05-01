@@ -566,11 +566,12 @@ ${currentPersona}：`;
 }
 .pm-main-ui { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
 .pm-navbar {
-    display: flex; align-items: center; justify-content: space-between;
+    display: grid; grid-template-columns: 1fr auto 1fr;
+    align-items: center;
     padding: 6px 10px; border-bottom: 1px solid #f0f0f0; flex-shrink: 0;
 }
 .pm-name {
-    font-weight: 700; color: #000; font-size: 15px; flex: 1;
+    font-weight: 700; color: #000; font-size: 15px;
     text-align: center; white-space: nowrap; overflow: hidden;
     text-overflow: ellipsis; padding: 0 4px;
 }
