@@ -51,7 +51,8 @@
     function createBubbleElement(text, side) {
         const b = document.createElement('div');
         b.className = `pm-bubble pm-${side}`;
-        const specialMatch = text.match(/^[\(（]\s*(转账|图片)\s*[+：:\s]*([^)）]+)[\)\）]$/);
+        const specialMatch = text.match(/[\(（]\s*(转账|图片)\s*[+：:\s]*([^)）]+)[\)\）]/);
+
         if (specialMatch) {
             const type = specialMatch[1], content = specialMatch[2].trim();
             b.style.cssText = 'background:transparent;box-shadow:none;padding:0;';
