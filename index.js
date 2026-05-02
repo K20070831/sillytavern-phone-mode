@@ -756,7 +756,7 @@ ${currentPersona}：`;
     <span onclick="document.getElementById('pm-overlay').remove()" class="pm-modal-close">✕</span>
   </div>
   <div class="pm-bi-bar">
-    <span>🧠 双向记忆：勾选的角色可被主楼读取最近 15 条短信</span>
+    <span>🧠 双向记忆：勾选的角色可被主楼读取短信内容</span>
     <span class="pm-bi-tip">已选 ${checked.length}/${MAX_BIDIRECTIONAL}</span>
   </div>
   <div class="pm-modal-list">
