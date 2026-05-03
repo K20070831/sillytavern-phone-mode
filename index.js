@@ -3,7 +3,8 @@
 
     // ── 可调常量 ──
     const SAVE_LIMIT = 60;
-    const CONTEXT_LIMIT = 15;
+    const CONTEXT_LIMIT = 20;            // 🔧 短信上下文条数：15 → 20
+    const BIDIRECTIONAL_LIMIT = 20;      // 🔧 双向记忆注入条数：15 → 20
     const MAX_BIDIRECTIONAL = 5;
     const BIDIRECTIONAL_KEY = 'PHONE_SMS_MEMORY';
     const VOICE_MAX_SEC = 60;
@@ -25,7 +26,6 @@
 
     const getCtx = () => typeof SillyTavern !== 'undefined' ? SillyTavern.getContext() : null;
 
-    // ── 关键词映射（中英文容错） ──
     const SPECIAL_KEYWORDS = {
         '转账':'转账','transfer':'转账','Transfer':'转账','TRANSFER':'转账',
         '图片':'图片','image':'图片','Image':'图片','IMAGE':'图片','img':'图片','pic':'图片','photo':'图片',
@@ -37,7 +37,6 @@
         return SPECIAL_KEYWORDS[k] || SPECIAL_KEYWORDS[k.toLowerCase()] || k;
     }
 
-    // ── 稳定的存储 ID ──
     function getStorageId() {
         const c = getCtx();
         if (!c) return 'sms_unknown__default';
@@ -51,7 +50,6 @@
         return `sms_${avatar}__${chatFile}`;
     }
 
-    // ── 旧索引迁移 ──
     function migrateOldHistory() {
         if (localStorage.getItem('ST_SMS_MIGRATED_V3')) return;
         const c = getCtx();
@@ -148,7 +146,8 @@
         }
 
         const blocks = checked.map(name => {
-            const conv = (histories[name] || []).slice(-15);
+            // 🔧 条数统一改为 20
+            const conv = (histories[name] || []).slice(-BIDIRECTIONAL_LIMIT);
             if (!conv.length) return '';
             const lines = conv.map(m => {
                 const text = (m.content || '').replace(/\s*\/\s*/g, '。');
@@ -241,8 +240,11 @@ ${blocks}
             const coords = getCoord(e);
             const dx = coords.x - startX, dy = coords.y - startY;
             if (Math.abs(dx) > 5 || Math.abs(dy) > 5) { moved = true; if (e.cancelable) e.preventDefault(); }
-            el.style.left = (startL + dx) + 'px'; el.style.top = (startT + dy) + 'px';
-            el.style.bottom = 'auto'; el.style.right = 'auto';
+            el.style.left = (startL + dx) + 'px';
+            el.style.top = (startT + dy) + 'px';
+            el.style.bottom = 'auto';
+            el.style.right = 'auto';
+            el.style.transform = 'none';  // 🔧 避免和手机端 @media 的 translate 冲突
         };
         const onEnd = () => {
             if (!isDragging) return;
@@ -287,7 +289,8 @@ ${blocks}
                 const txt = m[2].trim();
                 const len = [...txt].length;
                 const dur = Math.min(VOICE_MAX_SEC, Math.max(1, len * 2));
-                const width = Math.min(220, Math.max(80, 50 + len * 4));
+                // 🔧 语音条加宽：基础宽度 +20、单字系数 +1、封顶 +20，确保秒数不会溢出
+                const width = Math.min(240, Math.max(100, 80 + len * 5));
                 b.innerHTML = `
                     <div class="pm-voice-wrap">
                         <div class="pm-voice-card pm-voice-${side}" style="width:${width}px" onclick="window.__pmToggleVoice(this)">
@@ -312,7 +315,6 @@ ${blocks}
         if (txt) txt.style.display = txt.style.display === 'none' ? 'block' : 'none';
     };
 
-    // ── 文本清洗（更安全：只剥 think 块 + 零散标签） ──
     function cleanResponse(raw) {
         return (raw ?? '')
             .replace(/<think>[\s\S]*?<\/think>/gi, '')
@@ -323,12 +325,10 @@ ${blocks}
             .trim();
     }
 
-    // ── 分句（公用） ──
     function splitToSentences(str) {
         return (str || '').split(/\s*\/\s*/).map(s => s.trim()).filter(s => s.length > 0).slice(0, 8);
     }
 
-    // ── API 调用 ──
     async function fetchSMS(userMsg) {
         const c = getCtx();
         conversationHistory.push({ role: 'user', content: userMsg });
@@ -340,8 +340,6 @@ ${blocks}
             m.role === 'user' ? `用户：${cleanResponse(m.content)}` : `${currentPersona}：${cleanResponse(m.content)}`
         ).join('\n');
 
-        // 主 API 模式下：酒馆自带主聊天历史 + 角色卡 + 世界书，
-        // 所以只保留 scenario 和 mes_example 补充短信场景定位，避免重复注入导致请求过长
         const contextBlockMain = [
             cardScenario   ? `【场景参考】\n${cardScenario}` : '',
             cardMesExample ? `【对话示例】\n${cardMesExample}` : '',
@@ -378,7 +376,6 @@ ${currentPersona}：`;
             const useIndep = cfg.useIndependent && cfg.apiUrl && cfg.apiKey;
 
             if (useIndep) {
-                // 独立 API 保留完整上下文，因为它完全绕过酒馆
                 const systemPrompt = [
                     `你正在扮演"${currentPersona}"通过手机短信与用户聊天。`,
                     cardDesc        ? `【角色设定】\n${cardDesc}` : '',
@@ -411,19 +408,16 @@ ${currentPersona}：`;
                 raw = await c.generateQuietPrompt(injectedInstruction, false, false);
             }
 
-            // debug：方便用户 F12 看到 API 原始返回
             console.log('[phone-mode] raw response length:', (raw || '').length, '|', JSON.stringify((raw || '').slice(0, 200)));
 
             const clean = cleanResponse(raw);
             let sentences = splitToSentences(clean);
 
-            // 兜底 1：清洗把内容洗光了，但 raw 其实有内容 → 用 raw 再 split 一次
             if (sentences.length === 0 && raw && raw.trim()) {
                 console.warn('[phone-mode] 清洗后为空，尝试用原始 raw 兜底');
                 sentences = splitToSentences(raw.replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/<[^>]+>/g, ''));
             }
 
-            // 兜底 2：raw 本身就是空或只有空白
             if (sentences.length === 0) {
                 const mode = useIndep ? '独立API' : '主API';
                 if (!raw || !raw.trim()) {
@@ -875,6 +869,13 @@ ${currentPersona}：`;
     }
     setInterval(ensureVisibility, 2000);
 
+    // 🔧 手机端虚拟键盘弹出时修正位置
+    if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', () => {
+            if (phoneWindow) ensureVisibility();
+        });
+    }
+
     window.__pmOpen = () => {
         if (phoneActive && phoneWindow) { phoneWindow.style.display = 'flex'; ensureVisibility(); return; }
         try { window.__pmHistories = JSON.parse(localStorage.getItem('ST_SMS_DATA_V2')) || {}; } catch {}
@@ -934,7 +935,11 @@ ${currentPersona}：`;
         s.id = 'pm-css';
         s.textContent = `
 #pm-iphone {
-    position: fixed !important; bottom: 40px; right: 40px;
+    position: fixed !important;
+    bottom: 40px !important;
+    right: 40px !important;
+    top: auto !important;
+    left: auto !important;
     width: 330px !important; height: 580px !important;
     min-width: 330px !important; max-width: 330px !important;
     min-height: 580px !important; max-height: 580px !important;
@@ -988,21 +993,24 @@ ${currentPersona}：`;
 .pm-t-info b { font-size: 12px; opacity: 0.85; }
 .pm-t-info span { font-size: 17px; font-weight: 700; }
 .pm-img-card { background: #f2f2f7; border: 1px solid #e0e0e0; padding: 12px 14px; border-radius: 14px; color: #555; font-size: 13px; text-align: center; }
+
+/* 语音消息 */
 .pm-voice-wrap { display: flex; flex-direction: column; gap: 4px; align-items: inherit; }
 .pm-special.pm-right .pm-voice-wrap { align-items: flex-end; }
 .pm-special.pm-left .pm-voice-wrap { align-items: flex-start; }
-.pm-voice-card { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-radius: 18px; cursor: pointer; user-select: none; transition: filter 0.15s; }
+.pm-voice-card { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 18px; cursor: pointer; user-select: none; transition: filter 0.15s; }
 .pm-voice-card:hover { filter: brightness(0.96); }
 .pm-voice-right { background: #007aff; color: #fff; border-bottom-right-radius: 4px; flex-direction: row-reverse; }
 .pm-voice-left { background: #e9e9eb; color: #333; border-bottom-left-radius: 4px; }
-.pm-voice-icon { font-size: 14px; }
-.pm-voice-wave { flex: 1; display: flex; gap: 3px; align-items: center; height: 16px; }
+.pm-voice-icon { font-size: 14px; flex-shrink: 0; }
+.pm-voice-wave { flex: 1; display: flex; gap: 3px; align-items: center; height: 16px; min-width: 20px; }
 .pm-voice-wave i { display: inline-block; width: 3px; background: currentColor; opacity: 0.7; border-radius: 2px; animation: pm-wave 1s infinite ease-in-out; }
 .pm-voice-wave i:nth-child(1) { height: 8px; animation-delay: 0s; }
 .pm-voice-wave i:nth-child(2) { height: 14px; animation-delay: 0.2s; }
 .pm-voice-wave i:nth-child(3) { height: 10px; animation-delay: 0.4s; }
 @keyframes pm-wave { 0%,100% { transform: scaleY(0.5); } 50% { transform: scaleY(1); } }
-.pm-voice-dur { font-size: 12px; opacity: 0.85; min-width: 28px; text-align: right; }
+/* 🔧 语音时长区域：确保 "60″" 完整显示不溢出 */
+.pm-voice-dur { font-size: 12px; opacity: 0.85; min-width: 34px; text-align: right; flex-shrink: 0; font-variant-numeric: tabular-nums; }
 .pm-voice-text { background: #f7f7f9; border: 1px solid #e5e5e8; color: #333; padding: 7px 10px; border-radius: 10px; font-size: 13px; line-height: 1.4; max-width: 220px; word-break: break-word; position: relative; }
 .pm-voice-text::before { content: '已转文字'; position: absolute; top: -8px; left: 8px; font-size: 9px; color: #999; background: #fff; padding: 0 4px; border-radius: 4px; }
 
@@ -1057,6 +1065,48 @@ ${currentPersona}：`;
 .pm-model-opt { padding: 8px 12px; font-size: 13px; color: #333; cursor: pointer; border-bottom: 1px solid #f5f5f5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; height: 34px; box-sizing: border-box; line-height: 18px; }
 .pm-model-opt:hover { background: #f0f7ff; color: #007aff; }
 .pm-model-empty { padding: 14px; text-align: center; font-size: 12px; color: #999; }
+
+/* ═══════════════════════════════════════════ */
+/* 🔧 手机端响应式：视口宽 ≤ 500px 或 高 ≤ 700px */
+/* ═══════════════════════════════════════════ */
+@media (max-width: 500px), (max-height: 700px) {
+    #pm-iphone {
+        position: fixed !important;
+        top: 50% !important;
+        left: 50% !important;
+        bottom: auto !important;
+        right: auto !important;
+        transform: translate(-50%, -50%) !important;
+        width: min(330px, 92vw) !important;
+        height: min(580px, 85vh) !important;
+        min-width: 0 !important;
+        min-height: 0 !important;
+        max-width: 92vw !important;
+        max-height: 85vh !important;
+        border-width: 8px !important;
+        border-radius: 36px !important;
+    }
+    #pm-iphone.is-min {
+        top: auto !important;
+        left: auto !important;
+        bottom: 20px !important;
+        right: 20px !important;
+        transform: none !important;
+        width: 120px !important;
+        min-width: 120px !important;
+        max-width: 120px !important;
+        height: 44px !important;
+        min-height: 44px !important;
+        max-height: 44px !important;
+        border-width: 5px !important;
+        border-radius: 22px !important;
+    }
+    /* 联系人/配置弹窗在小屏也要收窄 */
+    .pm-modal, .pm-modal-wide {
+        width: min(320px, 94vw) !important;
+        max-height: 90vh !important;
+    }
+}
         `;
         document.head.appendChild(s);
     }
@@ -1107,5 +1157,5 @@ ${currentPersona}：`;
     loadBidirectional();
     setTimeout(() => { migrateOldHistory(); applyBidirectionalInjection(); }, 1500);
 
-    console.log('[phone-mode] 已加载 v3.2 — /phone 召唤');
+    console.log('[phone-mode] 已加载 v3.3 — /phone 召唤');
 })();
