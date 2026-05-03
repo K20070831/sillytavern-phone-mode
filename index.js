@@ -835,7 +835,15 @@ ${currentPersona}：`;
         window.__pmShowList();
     };
 
-    window.__pmToggleMin = () => { isMinimized = !isMinimized; phoneWindow.classList.toggle('is-min', isMinimized); };
+    window.__pmToggleMin = () => {
+    isMinimized = !isMinimized;
+    phoneWindow.classList.toggle('is-min', isMinimized);
+    // 🔧 Fix 3：切换最小化/还原时清掉拖拽残留的内联位置，让 CSS 重新接管
+    ['left', 'top', 'right', 'bottom', 'inset', 'margin', 'transform'].forEach(p => {
+        phoneWindow.style.removeProperty(p);
+    });
+};
+
     window.__pmEnd = () => {
         if (phoneWindow) {
             try { phoneWindow.hidePopover && phoneWindow.hidePopover(); } catch {}
