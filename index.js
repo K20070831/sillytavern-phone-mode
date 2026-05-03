@@ -1,7 +1,6 @@
 (async function () {
     await new Promise(r => setTimeout(r, 1000));
 
-    // ── 可调常量 ──
     const SAVE_LIMIT = 60;
     const CONTEXT_LIMIT = 20;
     const BIDIRECTIONAL_LIMIT = 20;
@@ -24,6 +23,8 @@
     let isMinimized = false;
     let isSelectMode = false;
 
+    const POPOVER_SUPPORTED = typeof HTMLElement !== 'undefined' && HTMLElement.prototype.hasOwnProperty('popover');
+
     const getCtx = () => typeof SillyTavern !== 'undefined' ? SillyTavern.getContext() : null;
 
     const SPECIAL_KEYWORDS = {
@@ -33,9 +34,7 @@
     };
     const KW_PATTERN = Object.keys(SPECIAL_KEYWORDS).join('|');
     const SPECIAL_RE = new RegExp(`[\\(（]\\s*(${KW_PATTERN})\\s*[+：:\\s]*([^)）]+)[\\)）]`, 'gi');
-    function normalizeKeyword(k) {
-        return SPECIAL_KEYWORDS[k] || SPECIAL_KEYWORDS[k.toLowerCase()] || k;
-    }
+    function normalizeKeyword(k) { return SPECIAL_KEYWORDS[k] || SPECIAL_KEYWORDS[k.toLowerCase()] || k; }
 
     function getStorageId() {
         const c = getCtx();
@@ -139,12 +138,10 @@
         const id = getStorageId();
         const checked = window.__pmBidirectional[id] || [];
         const histories = window.__pmHistories[id] || {};
-
         if (!checked.length) {
             try { c.setExtensionPrompt(BIDIRECTIONAL_KEY, '', 1, 4); } catch {}
             return;
         }
-
         const blocks = checked.map(name => {
             const conv = (histories[name] || []).slice(-BIDIRECTIONAL_LIMIT);
             if (!conv.length) return '';
@@ -154,12 +151,10 @@
             }).join('\n');
             return `【与 ${name} 的最近短信 — 仅 ${name} 与用户本人知晓，其他任何角色都不应知情】\n${lines}`;
         }).filter(Boolean).join('\n\n');
-
         if (!blocks) {
             try { c.setExtensionPrompt(BIDIRECTIONAL_KEY, '', 1, 4); } catch {}
             return;
         }
-
         const prompt = `[手机短信记忆 — 私密信息 · 严格隔离]
 以下是用户与某些角色之间的私人手机短信往来。**重要规则**：
 1. 每段短信只属于该段中标明的角色与用户本人，**其他任何角色都不知道这些内容**，请勿让他们表现出知情。
@@ -169,7 +164,6 @@
 ${blocks}
 
 [短信记忆结束]`;
-
         try { c.setExtensionPrompt(BIDIRECTIONAL_KEY, prompt, 1, 4); }
         catch (e) { console.warn('[phone-mode] 注入失败', e); }
     }
@@ -203,7 +197,6 @@ ${blocks}
             content: cleanMsg(m.mes || ''),
         })).filter(m => m.content);
         const mainChatText = mainChatArr.map(m => `${m.who}：${m.content}`).join('\n');
-
         let worldBookText = '';
         try {
             if (typeof c?.getWorldInfoPrompt === 'function') {
@@ -213,7 +206,6 @@ ${blocks}
                 if (!worldBookText && wi && typeof wi === 'object') worldBookText = [wi.worldInfoBefore, wi.worldInfoAfter].filter(Boolean).join('\n');
             }
         } catch (e) { console.warn('[phone-mode] 世界书读取失败', e); }
-
         return {
             cardDesc: char.description ?? '',
             cardPersonality: char.personality ?? '',
@@ -224,6 +216,7 @@ ${blocks}
         };
     }
 
+    // 🔧 拖拽：用 setProperty(important) 才能覆盖 CSS !important
     function bindIsland(el, handle) {
         let isDragging = false, startX, startY, startL, startT, moved = false;
         const getCoord = (e) => e.touches ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : { x: e.clientX, y: e.clientY };
@@ -231,7 +224,10 @@ ${blocks}
             if (e.target.tagName === 'BUTTON') return;
             isDragging = true; moved = false;
             const coords = getCoord(e);
-            startX = coords.x; startY = coords.y; startL = el.offsetLeft; startT = el.offsetTop;
+            startX = coords.x; startY = coords.y;
+            // 记录元素当前真实位置（getBoundingClientRect 不受 transform 影响时更准）
+            const rect = el.getBoundingClientRect();
+            startL = rect.left; startT = rect.top;
             el.style.transition = 'none';
         };
         const onMove = (e) => {
@@ -239,12 +235,14 @@ ${blocks}
             const coords = getCoord(e);
             const dx = coords.x - startX, dy = coords.y - startY;
             if (Math.abs(dx) > 5 || Math.abs(dy) > 5) { moved = true; if (e.cancelable) e.preventDefault(); }
-            el.style.left = (startL + dx) + 'px';
-            el.style.top = (startT + dy) + 'px';
-            el.style.bottom = 'auto';
-            el.style.right = 'auto';
-            el.style.margin = '0';
-            el.style.transform = 'none';
+            // 关键：用 setProperty + important 覆盖 CSS !important
+            el.style.setProperty('left', (startL + dx) + 'px', 'important');
+            el.style.setProperty('top', (startT + dy) + 'px', 'important');
+            el.style.setProperty('right', 'auto', 'important');
+            el.style.setProperty('bottom', 'auto', 'important');
+            el.style.setProperty('inset', 'auto', 'important');
+            el.style.setProperty('margin', '0', 'important');
+            el.style.setProperty('transform', 'none', 'important');
         };
         const onEnd = () => {
             if (!isDragging) return;
@@ -260,8 +258,8 @@ ${blocks}
         window.addEventListener('touchend', onEnd);
     }
 
-    function escapeHtml(s) { return (s || '').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-    function escapeAttr(s) { return (s || '').replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
+    function escapeHtml(s) { return (s || '').replace(/</g,'<').replace(/>/g,'>'); }
+    function escapeAttr(s) { return (s || '').replace(/"/g,'"').replace(/</g,'<'); }
 
     function createBubbles(text, side) {
         const results = [];
@@ -331,19 +329,15 @@ ${blocks}
     async function fetchSMS(userMsg) {
         const c = getCtx();
         conversationHistory.push({ role: 'user', content: userMsg });
-
         const ctxData = await gatherContext();
         const { cardDesc, cardPersonality, cardScenario, cardFirstMes, cardMesExample, mainChatText, worldBookText } = ctxData;
-
         const smsHistoryText = conversationHistory.slice(-CONTEXT_LIMIT).map(m =>
             m.role === 'user' ? `用户：${cleanResponse(m.content)}` : `${currentPersona}：${cleanResponse(m.content)}`
         ).join('\n');
-
         const contextBlockMain = [
             cardScenario   ? `【场景参考】\n${cardScenario}` : '',
             cardMesExample ? `【对话示例】\n${cardMesExample}` : '',
         ].filter(Boolean).join('\n\n');
-
         const injectedInstruction = `
 
 [短信模式指令——最高优先级]
@@ -373,7 +367,6 @@ ${currentPersona}：`;
             let raw = '';
             const cfg = window.__pmConfig;
             const useIndep = cfg.useIndependent && cfg.apiUrl && cfg.apiKey;
-
             if (useIndep) {
                 const systemPrompt = [
                     `你正在扮演"${currentPersona}"通过手机短信与用户聊天。`,
@@ -389,12 +382,10 @@ ${currentPersona}：`;
                     '特殊格式（必须中文）：(转账+金额) (图片+描述) (语音+内容)。严禁英文格式。',
                     '禁止任何标签格式旁白选项。',
                 ].filter(Boolean).join('\n\n');
-
                 const messages = [
                     { role: 'system', content: systemPrompt },
                     ...conversationHistory.slice(-CONTEXT_LIMIT).map(m => ({ role: m.role, content: cleanResponse(m.content) }))
                 ];
-
                 const { chatUrl } = normalizeApiUrls(cfg.apiUrl);
                 const resp = await fetch(chatUrl, {
                     method: 'POST',
@@ -406,34 +397,23 @@ ${currentPersona}：`;
             } else {
                 raw = await c.generateQuietPrompt(injectedInstruction, false, false);
             }
-
             console.log('[phone-mode] raw response length:', (raw || '').length, '|', JSON.stringify((raw || '').slice(0, 200)));
-
             const clean = cleanResponse(raw);
             let sentences = splitToSentences(clean);
-
             if (sentences.length === 0 && raw && raw.trim()) {
-                console.warn('[phone-mode] 清洗后为空，尝试用原始 raw 兜底');
                 sentences = splitToSentences(raw.replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/<[^>]+>/g, ''));
             }
-
             if (sentences.length === 0) {
                 const mode = useIndep ? '独立API' : '主API';
-                if (!raw || !raw.trim()) {
-                    sentences = [`（${mode} 空响应：可能超时/限流/预设过长，建议切换API或精简预设）`];
-                } else {
-                    sentences = [`（${mode} 返回格式无法解析，已记录到控制台 F12）`];
-                }
-                console.warn('[phone-mode] 最终空响应，raw=', JSON.stringify(raw));
+                sentences = !raw || !raw.trim()
+                    ? [`（${mode} 空响应：可能超时/限流/预设过长）`]
+                    : [`（${mode} 返回格式无法解析，已记录到 F12）`];
             }
-
             conversationHistory.push({ role: 'assistant', content: sentences.join(' / ') });
-
             const id = getStorageId();
             if (!window.__pmHistories[id]) window.__pmHistories[id] = {};
             window.__pmHistories[id][currentPersona] = conversationHistory.slice(-SAVE_LIMIT);
             try { localStorage.setItem('ST_SMS_DATA_V2', JSON.stringify(window.__pmHistories)); } catch {}
-
             applyBidirectionalInjection();
             return sentences;
         } catch (e) {
@@ -479,25 +459,20 @@ ${currentPersona}：`;
         const val = input.value.trim();
         if (!val) return;
         input.value = '';
-
         const protect = val.replace(/[\(（][^)）]+[\)\）]/g, m => m.replace(/\//g, '\u0001'));
         protect.split(/[/／]/).map(s => s.replace(/\u0001/g, '/').trim()).filter(Boolean)
             .forEach(chunk => addBubble(chunk, 'right'));
-
         isGenerating = true;
         input.disabled = true;
         const btn = phoneWindow.querySelector('.pm-up-btn');
         if (btn) btn.disabled = true;
-
         showTyping();
         const sentences = await fetchSMS(val);
         hideTyping();
-
         for (const s of sentences) {
             await new Promise(r => setTimeout(r, 150));
             addBubble(s, 'left');
         }
-
         isGenerating = false;
         input.disabled = false;
         if (btn) btn.disabled = false;
@@ -579,13 +554,13 @@ ${currentPersona}：`;
         const dd = document.createElement('div');
         dd.id = 'pm-model-dropdown';
         dd.className = 'pm-model-dropdown';
-        dd.innerHTML = `
-            <input class="pm-model-search" placeholder="🔍 搜索模型..." />
-            <div class="pm-model-options"></div>`;
+        if (POPOVER_SUPPORTED) dd.setAttribute('popover', 'manual');
+        dd.innerHTML = `<input class="pm-model-search" placeholder="🔍 搜索模型..." /><div class="pm-model-options"></div>`;
         dd.style.left = inputRect.left + 'px';
         dd.style.top = (inputRect.bottom + 4) + 'px';
         dd.style.width = inputRect.width + 'px';
         document.body.appendChild(dd);
+        if (dd.showPopover) { try { dd.showPopover(); } catch {} }
         const optsDiv = dd.querySelector('.pm-model-options');
         const renderOpts = (filter='') => {
             const f = filter.toLowerCase();
@@ -615,8 +590,20 @@ ${currentPersona}：`;
         }, 0);
     };
 
-    window.__pmShowConfig = () => {
+    // 通用 popover 弹窗工具
+    function makeOverlay(innerHTML) {
         document.getElementById('pm-overlay')?.remove();
+        const ov = document.createElement('div');
+        ov.id = 'pm-overlay';
+        if (POPOVER_SUPPORTED) ov.setAttribute('popover', 'manual');
+        ov.innerHTML = innerHTML;
+        ov.addEventListener('click', e => { if (e.target === ov) ov.remove(); });
+        document.body.appendChild(ov);
+        if (ov.showPopover) { try { ov.showPopover(); } catch {} }
+        return ov;
+    }
+
+    window.__pmShowConfig = () => {
         loadProfiles();
         const cfg = window.__pmConfig;
         const shortUrl = (u) => (u || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
@@ -633,10 +620,7 @@ ${currentPersona}：`;
             : '<div class="pm-prof-empty">暂无已保存档案，连接成功后会自动保存</div>';
         const useIndep = !!cfg.useIndependent;
         const modeTip = useIndep ? '🔌 当前：独立API' : '🏠 当前：主API';
-
-        const ov = document.createElement('div');
-        ov.id = 'pm-overlay';
-        ov.innerHTML = `
+        makeOverlay(`
 <div class="pm-modal pm-modal-wide">
   <div class="pm-modal-header">
     <b>API 配置</b>
@@ -675,9 +659,7 @@ ${currentPersona}：`;
     </div>
     <button onclick="window.__pmSaveConfig()" style="background:#007aff;color:#fff;border:none;border-radius:10px;padding:10px;font-size:13px;cursor:pointer;font-weight:600;">保存配置</button>
   </div>
-</div>`;
-        ov.addEventListener('click', e => { if (e.target === ov) ov.remove(); });
-        document.body.appendChild(ov);
+</div>`);
     };
 
     window.__pmTestApi = async () => {
@@ -769,14 +751,10 @@ ${currentPersona}：`;
     };
 
     window.__pmShowList = () => {
-        document.getElementById('pm-overlay')?.remove();
         const id = getStorageId();
         const list = Object.keys(window.__pmHistories[id] || {});
         const checked = window.__pmBidirectional[id] || [];
-
-        const ov = document.createElement('div');
-        ov.id = 'pm-overlay';
-        ov.innerHTML = `
+        makeOverlay(`
 <div class="pm-modal">
   <div class="pm-modal-header">
     <b>联系人</b>
@@ -804,9 +782,7 @@ ${currentPersona}：`;
     <input id="pm-add-input" placeholder="输入角色名...">
     <button onclick="window.__pmSwitch(document.getElementById('pm-add-input').value.trim())">开始聊天</button>
   </div>
-</div>`;
-        ov.addEventListener('click', e => { if (e.target === ov) ov.remove(); });
-        document.body.appendChild(ov);
+</div>`);
         setTimeout(() => {
             document.getElementById('pm-add-input')?.addEventListener('keydown', e => {
                 if (e.key === 'Enter') window.__pmSwitch(document.getElementById('pm-add-input').value.trim());
@@ -852,7 +828,16 @@ ${currentPersona}：`;
     };
 
     window.__pmToggleMin = () => { isMinimized = !isMinimized; phoneWindow.classList.toggle('is-min', isMinimized); };
-    window.__pmEnd = () => { phoneWindow?.remove(); phoneWindow = null; phoneActive = false; isMinimized = false; isSelectMode = false; };
+    window.__pmEnd = () => {
+        if (phoneWindow) {
+            try { phoneWindow.hidePopover && phoneWindow.hidePopover(); } catch {}
+            phoneWindow.remove();
+        }
+        phoneWindow = null;
+        phoneActive = false;
+        isMinimized = false;
+        isSelectMode = false;
+    };
 
     function ensureVisibility() {
         if (!phoneWindow) return;
@@ -868,14 +853,14 @@ ${currentPersona}：`;
     }
     setInterval(ensureVisibility, 2000);
 
-    if (window.visualViewport) {
-        window.visualViewport.addEventListener('resize', () => {
-            if (phoneWindow) ensureVisibility();
-        });
-    }
-
     window.__pmOpen = () => {
-        if (phoneActive && phoneWindow) { phoneWindow.style.display = 'flex'; ensureVisibility(); return; }
+        console.log('[phone-mode] __pmOpen called, active=', phoneActive, 'win=', !!phoneWindow);
+        if (phoneActive && phoneWindow) {
+            try { phoneWindow.showPopover && !phoneWindow.matches(':popover-open') && phoneWindow.showPopover(); } catch {}
+            phoneWindow.style.display = 'flex';
+            ensureVisibility();
+            return;
+        }
         try { window.__pmHistories = JSON.parse(localStorage.getItem('ST_SMS_DATA_V2')) || {}; } catch {}
         try {
             const saved = JSON.parse(localStorage.getItem('ST_SMS_CONFIG'));
@@ -893,6 +878,9 @@ ${currentPersona}：`;
 
         phoneWindow = document.createElement('div');
         phoneWindow.id = 'pm-iphone';
+        // 🔧 关键：用 popover API，元素进入 top layer，完全脱离 transform 祖先污染
+        if (POPOVER_SUPPORTED) phoneWindow.setAttribute('popover', 'manual');
+
         phoneWindow.innerHTML = `
 <div class="pm-island"></div>
 <div class="pm-main-ui">
@@ -917,8 +905,15 @@ ${currentPersona}：`;
   </div>
 </div>`;
 
-        // 🔧 挂到 <html> 而非 <body>，避免 body 内层 transform 容器破坏 fixed 定位
-        (document.documentElement || document.body).appendChild(phoneWindow);
+        document.body.appendChild(phoneWindow);
+        // 进入 top layer（脱离 transform 祖先）
+        if (phoneWindow.showPopover) {
+            try { phoneWindow.showPopover(); console.log('[phone-mode] popover opened'); }
+            catch (e) { console.warn('[phone-mode] showPopover failed', e); }
+        } else {
+            console.warn('[phone-mode] popover API 不支持，使用降级方案');
+        }
+
         phoneActive = true;
         phoneWindow.querySelector('.pm-input').addEventListener('keydown', e => {
             if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); window.__pmSend(); }
@@ -933,18 +928,30 @@ ${currentPersona}：`;
         const s = document.createElement('style');
         s.id = 'pm-css';
         s.textContent = `
+/* popover 元素的 user-agent 默认样式 reset */
+[popover] {
+    border: none;
+    padding: 0;
+    background: transparent;
+    color: inherit;
+    width: auto;
+    height: auto;
+    margin: 0;
+    overflow: visible;
+}
+[popover]::backdrop { display: none; background: transparent; }
+
 #pm-iphone {
     position: fixed !important;
-    bottom: 40px !important;
-    right: 40px !important;
-    top: auto !important;
-    left: auto !important;
+    inset: auto 40px 40px auto !important;
     margin: 0 !important;
+    transform: none !important;
     width: 330px !important; height: 580px !important;
     min-width: 330px !important; max-width: 330px !important;
     min-height: 580px !important; max-height: 580px !important;
     background: #fff !important; border: 10px solid #1a1a1a !important;
-    border-radius: 45px !important; z-index: 2147483647 !important;
+    border-radius: 45px !important;
+    z-index: 2147483647 !important;
     display: flex !important; flex-direction: column !important;
     visibility: visible !important; opacity: 1 !important;
     overflow: hidden !important;
@@ -953,10 +960,11 @@ ${currentPersona}：`;
     font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif !important;
     touch-action: none; box-sizing: border-box !important;
     pointer-events: auto !important;
-    transform: none !important;
     filter: none !important;
+    color: #000 !important;
 }
 #pm-iphone.is-min {
+    inset: auto 40px 40px auto !important;
     height: 50px !important; min-height: 50px !important; max-height: 50px !important;
     width: 140px !important; min-width: 140px !important; max-width: 140px !important;
     border-radius: 25px !important; border-width: 6px !important;
@@ -1018,9 +1026,24 @@ ${currentPersona}：`;
 .pm-up-btn { width: 32px !important; height: 32px !important; background: #007aff !important; color: #fff !important; border: none !important; border-radius: 50% !important; cursor: pointer; font-size: 16px !important; font-weight: bold; display: flex !important; align-items: center !important; justify-content: center !important; flex-shrink: 0; }
 .pm-up-btn:disabled { background: #ccc !important; cursor: default; }
 
-#pm-overlay { position: fixed !important; inset: 0 !important; background: rgba(0,0,0,0.45) !important; z-index: 2147483647 !important; display: flex !important; align-items: center !important; justify-content: center !important; }
-.pm-modal { background: #fff !important; border-radius: 20px !important; width: 290px; max-height: 85vh; display: flex !important; flex-direction: column !important; overflow: hidden; box-shadow: 0 16px 48px rgba(0,0,0,0.28); font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif !important; }
-.pm-modal-wide { width: 320px; max-height: 85vh; }
+#pm-overlay {
+    position: fixed !important;
+    inset: 0 !important;
+    margin: 0 !important;
+    width: 100vw !important;
+    height: 100vh !important;
+    height: 100dvh !important;
+    max-width: none !important; max-height: none !important;
+    background: rgba(0,0,0,0.45) !important;
+    z-index: 2147483647 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    border: none !important;
+    padding: 0 !important;
+}
+.pm-modal { background: #fff !important; border-radius: 20px !important; width: 290px; max-height: 85vh; max-height: 85dvh; display: flex !important; flex-direction: column !important; overflow: hidden; box-shadow: 0 16px 48px rgba(0,0,0,0.28); font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif !important; }
+.pm-modal-wide { width: 320px; }
 .pm-modal-scroll { flex: 1; overflow-y: auto; min-height: 0; }
 .pm-modal-header { display: flex !important; justify-content: space-between !important; align-items: center !important; padding: 16px 18px 12px !important; border-bottom: 1px solid #f0f0f0; flex-shrink: 0; }
 .pm-modal-header b { font-size: 16px !important; color: #000 !important; }
@@ -1057,23 +1080,17 @@ ${currentPersona}：`;
 .pm-model-row .pm-cfg-input { flex: 1; }
 #pm-model-arrow { background: #f0f0f3; border: 1px solid #ddd; border-radius: 10px; width: 38px; cursor: pointer; font-size: 12px; color: #555; flex-shrink: 0; transition: all 0.15s; }
 #pm-model-arrow:hover { background: #007aff; color: #fff; border-color: #007aff; }
-.pm-model-dropdown { position: fixed; z-index: 2147483647; background: #fff; border: 1px solid #ddd; border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.18); overflow: hidden; display: flex; flex-direction: column; min-width: 200px; }
+.pm-model-dropdown { position: fixed; z-index: 2147483647; background: #fff !important; border: 1px solid #ddd !important; border-radius: 12px !important; box-shadow: 0 8px 24px rgba(0,0,0,0.18); overflow: hidden; display: flex; flex-direction: column; min-width: 200px; padding: 0 !important; margin: 0 !important; color: #000 !important; }
 .pm-model-search { border: none !important; border-bottom: 1px solid #eee !important; padding: 9px 12px !important; outline: none; font-size: 13px !important; background: #fafafa !important; color: #000 !important; box-sizing: border-box; width: 100%; font-family: inherit; }
 .pm-model-options { overflow-y: auto; max-height: ${MODEL_VISIBLE_ROWS * 34}px; }
 .pm-model-opt { padding: 8px 12px; font-size: 13px; color: #333; cursor: pointer; border-bottom: 1px solid #f5f5f5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; height: 34px; box-sizing: border-box; line-height: 18px; }
 .pm-model-opt:hover { background: #f0f7ff; color: #007aff; }
 .pm-model-empty { padding: 14px; text-align: center; font-size: 12px; color: #999; }
 
-/* ═══════════════════════════════════════════ */
-/* 🔧 手机端响应式：用 inset:0 + margin:auto 真居中 */
-/* ═══════════════════════════════════════════ */
+/* 🔧 手机端响应式：top layer 中 inset:0 + margin:auto 真居中 */
 @media (max-width: 500px), (max-height: 700px) {
     #pm-iphone {
-        position: fixed !important;
-        top: 0 !important;
-        left: 0 !important;
-        right: 0 !important;
-        bottom: 0 !important;
+        inset: 0 !important;
         margin: auto !important;
         transform: none !important;
         width: min(330px, 92vw) !important;
@@ -1088,18 +1105,12 @@ ${currentPersona}：`;
         border-radius: 36px !important;
     }
     #pm-iphone.is-min {
-        top: auto !important;
-        left: auto !important;
-        bottom: 20px !important;
-        right: 20px !important;
+        inset: auto 20px 20px auto !important;
         margin: 0 !important;
-        transform: none !important;
         width: 120px !important;
-        min-width: 120px !important;
-        max-width: 120px !important;
+        min-width: 120px !important; max-width: 120px !important;
         height: 44px !important;
-        min-height: 44px !important;
-        max-height: 44px !important;
+        min-height: 44px !important; max-height: 44px !important;
         border-width: 5px !important;
         border-radius: 22px !important;
     }
@@ -1159,5 +1170,5 @@ ${currentPersona}：`;
     loadBidirectional();
     setTimeout(() => { migrateOldHistory(); applyBidirectionalInjection(); }, 1500);
 
-    console.log('[phone-mode] 已加载 v3.4 — /phone 召唤');
+    console.log('[phone-mode] 已加载 v3.5 — popover top layer / popover support:', POPOVER_SUPPORTED);
 })();
