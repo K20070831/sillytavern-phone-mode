@@ -3,8 +3,8 @@
 
     // ── 可调常量 ──
     const SAVE_LIMIT = 60;
-    const CONTEXT_LIMIT = 20;            // 🔧 短信上下文条数：15 → 20
-    const BIDIRECTIONAL_LIMIT = 20;      // 🔧 双向记忆注入条数：15 → 20
+    const CONTEXT_LIMIT = 20;
+    const BIDIRECTIONAL_LIMIT = 20;
     const MAX_BIDIRECTIONAL = 5;
     const BIDIRECTIONAL_KEY = 'PHONE_SMS_MEMORY';
     const VOICE_MAX_SEC = 60;
@@ -146,7 +146,6 @@
         }
 
         const blocks = checked.map(name => {
-            // 🔧 条数统一改为 20
             const conv = (histories[name] || []).slice(-BIDIRECTIONAL_LIMIT);
             if (!conv.length) return '';
             const lines = conv.map(m => {
@@ -244,7 +243,8 @@ ${blocks}
             el.style.top = (startT + dy) + 'px';
             el.style.bottom = 'auto';
             el.style.right = 'auto';
-            el.style.transform = 'none';  // 🔧 避免和手机端 @media 的 translate 冲突
+            el.style.margin = '0';
+            el.style.transform = 'none';
         };
         const onEnd = () => {
             if (!isDragging) return;
@@ -260,8 +260,8 @@ ${blocks}
         window.addEventListener('touchend', onEnd);
     }
 
-    function escapeHtml(s) { return (s || '').replace(/</g,'<').replace(/>/g,'>'); }
-    function escapeAttr(s) { return (s || '').replace(/"/g,'"').replace(/</g,'<'); }
+    function escapeHtml(s) { return (s || '').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+    function escapeAttr(s) { return (s || '').replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
 
     function createBubbles(text, side) {
         const results = [];
@@ -289,7 +289,6 @@ ${blocks}
                 const txt = m[2].trim();
                 const len = [...txt].length;
                 const dur = Math.min(VOICE_MAX_SEC, Math.max(1, len * 2));
-                // 🔧 语音条加宽：基础宽度 +20、单字系数 +1、封顶 +20，确保秒数不会溢出
                 const width = Math.min(240, Math.max(100, 80 + len * 5));
                 b.innerHTML = `
                     <div class="pm-voice-wrap">
@@ -869,7 +868,6 @@ ${currentPersona}：`;
     }
     setInterval(ensureVisibility, 2000);
 
-    // 🔧 手机端虚拟键盘弹出时修正位置
     if (window.visualViewport) {
         window.visualViewport.addEventListener('resize', () => {
             if (phoneWindow) ensureVisibility();
@@ -919,7 +917,8 @@ ${currentPersona}：`;
   </div>
 </div>`;
 
-        document.body.appendChild(phoneWindow);
+        // 🔧 挂到 <html> 而非 <body>，避免 body 内层 transform 容器破坏 fixed 定位
+        (document.documentElement || document.body).appendChild(phoneWindow);
         phoneActive = true;
         phoneWindow.querySelector('.pm-input').addEventListener('keydown', e => {
             if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); window.__pmSend(); }
@@ -940,6 +939,7 @@ ${currentPersona}：`;
     right: 40px !important;
     top: auto !important;
     left: auto !important;
+    margin: 0 !important;
     width: 330px !important; height: 580px !important;
     min-width: 330px !important; max-width: 330px !important;
     min-height: 580px !important; max-height: 580px !important;
@@ -994,7 +994,6 @@ ${currentPersona}：`;
 .pm-t-info span { font-size: 17px; font-weight: 700; }
 .pm-img-card { background: #f2f2f7; border: 1px solid #e0e0e0; padding: 12px 14px; border-radius: 14px; color: #555; font-size: 13px; text-align: center; }
 
-/* 语音消息 */
 .pm-voice-wrap { display: flex; flex-direction: column; gap: 4px; align-items: inherit; }
 .pm-special.pm-right .pm-voice-wrap { align-items: flex-end; }
 .pm-special.pm-left .pm-voice-wrap { align-items: flex-start; }
@@ -1009,7 +1008,6 @@ ${currentPersona}：`;
 .pm-voice-wave i:nth-child(2) { height: 14px; animation-delay: 0.2s; }
 .pm-voice-wave i:nth-child(3) { height: 10px; animation-delay: 0.4s; }
 @keyframes pm-wave { 0%,100% { transform: scaleY(0.5); } 50% { transform: scaleY(1); } }
-/* 🔧 语音时长区域：确保 "60″" 完整显示不溢出 */
 .pm-voice-dur { font-size: 12px; opacity: 0.85; min-width: 34px; text-align: right; flex-shrink: 0; font-variant-numeric: tabular-nums; }
 .pm-voice-text { background: #f7f7f9; border: 1px solid #e5e5e8; color: #333; padding: 7px 10px; border-radius: 10px; font-size: 13px; line-height: 1.4; max-width: 220px; word-break: break-word; position: relative; }
 .pm-voice-text::before { content: '已转文字'; position: absolute; top: -8px; left: 8px; font-size: 9px; color: #999; background: #fff; padding: 0 4px; border-radius: 4px; }
@@ -1067,22 +1065,25 @@ ${currentPersona}：`;
 .pm-model-empty { padding: 14px; text-align: center; font-size: 12px; color: #999; }
 
 /* ═══════════════════════════════════════════ */
-/* 🔧 手机端响应式：视口宽 ≤ 500px 或 高 ≤ 700px */
+/* 🔧 手机端响应式：用 inset:0 + margin:auto 真居中 */
 /* ═══════════════════════════════════════════ */
 @media (max-width: 500px), (max-height: 700px) {
     #pm-iphone {
         position: fixed !important;
-        top: 50% !important;
-        left: 50% !important;
-        bottom: auto !important;
-        right: auto !important;
-        transform: translate(-50%, -50%) !important;
+        top: 0 !important;
+        left: 0 !important;
+        right: 0 !important;
+        bottom: 0 !important;
+        margin: auto !important;
+        transform: none !important;
         width: min(330px, 92vw) !important;
-        height: min(580px, 85vh) !important;
+        height: min(560px, 82vh) !important;
+        height: min(560px, 82dvh) !important;
         min-width: 0 !important;
         min-height: 0 !important;
         max-width: 92vw !important;
-        max-height: 85vh !important;
+        max-height: 82vh !important;
+        max-height: 82dvh !important;
         border-width: 8px !important;
         border-radius: 36px !important;
     }
@@ -1091,6 +1092,7 @@ ${currentPersona}：`;
         left: auto !important;
         bottom: 20px !important;
         right: 20px !important;
+        margin: 0 !important;
         transform: none !important;
         width: 120px !important;
         min-width: 120px !important;
@@ -1101,10 +1103,10 @@ ${currentPersona}：`;
         border-width: 5px !important;
         border-radius: 22px !important;
     }
-    /* 联系人/配置弹窗在小屏也要收窄 */
     .pm-modal, .pm-modal-wide {
         width: min(320px, 94vw) !important;
         max-height: 90vh !important;
+        max-height: 90dvh !important;
     }
 }
         `;
@@ -1157,5 +1159,5 @@ ${currentPersona}：`;
     loadBidirectional();
     setTimeout(() => { migrateOldHistory(); applyBidirectionalInjection(); }, 1500);
 
-    console.log('[phone-mode] 已加载 v3.3 — /phone 召唤');
+    console.log('[phone-mode] 已加载 v3.4 — /phone 召唤');
 })();
