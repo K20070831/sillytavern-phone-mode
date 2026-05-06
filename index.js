@@ -474,8 +474,13 @@
                 b.innerHTML = `<div class="pm-img-card">🖼️ ${escapeHtml(m[2].trim())}</div>`;
             } else {
                 const txt = m[2].trim(), len = [...txt].length;
-                const dur = Math.min(VOICE_MAX_SEC, Math.max(1, len * 2));
-                const width = Math.min(240, Math.max(110, 90 + len * 5));
+                // 分段映射：短句 1-5s，中等 5-20s，长句 20-60s
+                let dur;
+                if (len <= 5) dur = Math.max(1, len);              // 1-5 字 = 1-5 秒
+                else if (len <= 15) dur = 5 + (len - 5);           // 6-15 字 = 6-15 秒
+                else if (len <= 40) dur = 15 + Math.ceil((len - 15) * 0.8);  // 16-40 字 = 16-35 秒
+                else dur = Math.min(VOICE_MAX_SEC, 35 + Math.ceil((len - 40) * 0.5));  // 40+ 字 = 35-60 秒
+                const width = Math.min(240, Math.max(110, 90 + Math.min(len, 30) * 4));
                 let voiceStyle = `width:${width}px`, voiceClass = `pm-voice-card pm-voice-${side}`;
                 if (isGroupLeft && gc) {
                     voiceStyle = `width:${width}px;background:${gc.bg} !important;color:${gc.text} !important;`;
