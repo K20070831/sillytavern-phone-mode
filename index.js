@@ -542,11 +542,11 @@
     }
     function escapeAttr(s) {
         return (s || '')
-            .replace(/&/g, '&')
-            .replace(/"/g, '"')
-            .replace(/'/g, ''')
-            .replace(/</g, '<');
-    }
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;')
+            .replace(/</g, '&lt;')
+            .replace(/&/g, '&amp;');  // ← 最后转 &，避免二重转义
+}
 
     function resolveGroupColor(name) {
         if (!name) return null;
