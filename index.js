@@ -691,7 +691,7 @@ ${currentPersona}：`;
                 worldBookText ? `【世界书】\n${worldBookText}` : '',
                 mainChatText ? `【主线最近对话】\n${mainChatText}` : '',
                 '',
-                '只输出3到8句短信，每句用 / 分隔。',
+                '只输出3到8句短信，每句用 / 分隔，不得中途截断。',
                 '特殊格式（必须中文单行闭合）：(转账+金额) (收款+金额) (图片+描述) (语音+内容)。',
                 '禁止任何标签格式旁白选项状态栏。',
             ].filter(Boolean).join('\n\n');
