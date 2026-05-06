@@ -282,18 +282,28 @@
 
     // 🔧 修复 #5：挂钩酒馆事件，每次生成前实时刷新
     function hookGenerationEvent() {
-        if (__pmEventHooked) return;
-        const c = getCtx();
-        if (!c?.eventSource || !c?.event_types) return;
-        const ev = c.event_types.GENERATION_STARTED || 'generation_started';
+    if (__pmEventHooked) return;
+    const c = getCtx();
+    if (!c?.eventSource || !c?.event_types) return;
+    const et = c.event_types;
+    const events = [
+        et.GENERATION_STARTED || 'generation_started',
+        et.CHAT_CHANGED || 'chat_id_changed',
+        et.SETTINGS_UPDATED || 'settings_updated',
+        et.CHATCOMPLETION_SOURCE_CHANGED || 'chatcompletion_source_changed',
+        et.OAI_PRESET_CHANGED_AFTER || 'oai_preset_changed_after',
+    ];
+    events.forEach(ev => {
         try {
             c.eventSource.on(ev, () => {
                 try { applyBidirectionalInjection(); } catch {}
             });
-            __pmEventHooked = true;
-            console.log('[phone-mode] hooked generation event');
-        } catch (e) { console.warn('[phone-mode] hook failed', e); }
-    }
+        } catch {}
+    });
+    __pmEventHooked = true;
+    console.log('[phone-mode] hooked', events.length, 'events');
+}
+
 
     window.__pmToggleBidirectional = (name) => {
         const id = getStorageId(), arr = window.__pmBidirectional[id] || [], idx = arr.indexOf(name);
