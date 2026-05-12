@@ -400,6 +400,10 @@
 
     function applyBidirectionalInjection() {
         const c = getCtx(); if (!c || typeof c.setExtensionPrompt !== 'function') return;
+        
+        // 👇 新增：获取当前 ST 里的真实用户名（如果没有则回退为"用户"）
+        const userName = getUserPersona().name || '用户';
+        
         const id = getStorageId(), checked = window.__pmBidirectional[id] || [], histories = window.__pmHistories[id] || {};
         const groups = window.__pmGroupMeta[id] || {};
         if (!checked.length) { try { c.setExtensionPrompt(BIDIRECTIONAL_KEY, '', 0, 0, false, 0); } catch {} return; }
@@ -410,12 +414,19 @@
                 const meta = groups[name]; if (!meta) return '';
                 const lines = conv.map(m => {
                     const t = (m.content || '').replace(/\s*\/\s*/g, '。').replace(/\n/g, '；');
-                    return m.role === 'user' ? `用户：${t}` : t;
+                    // 👇 修改：把写死的“用户：”换成真实名字
+                    return m.role === 'user' ? `${userName}：${t}` : t;
                 }).join('\n');
-                return `【群聊"${meta.name}"（成员：${meta.members.join('、')}）的最近聊天 — 仅参与者与用户知晓，其他角色不应知情】\n${lines}`;
+                // 👇 修改：提示词里的说明也换成真实名字
+                return `【群聊"${meta.name}"（成员：${meta.members.join('、')}）的最近聊天 — 仅参与者与 ${userName} 知晓，其他角色不应知情】\n${lines}`;
             }
-            const lines = conv.map(m => { const t = (m.content || '').replace(/\s*\/\s*/g, '。'); return m.role === 'user' ? `用户：${t}` : `${name}：${t}`; }).join('\n');
-            return `【与 ${name} 的短信 — 仅 ${name} 与用户知晓】\n${lines}`;
+            const lines = conv.map(m => { 
+                const t = (m.content || '').replace(/\s*\/\s*/g, '。'); 
+                // 👇 修改：把写死的“用户：”换成真实名字
+                return m.role === 'user' ? `${userName}：${t}` : `${name}：${t}`; 
+            }).join('\n');
+            // 👇 修改：提示词里的说明也换成真实名字
+            return `【与 ${name} 的短信 — 仅 ${name} 与 ${userName} 知晓】\n${lines}`;
         }).filter(Boolean).join('\n\n');
         if (!blocks) { try { c.setExtensionPrompt(BIDIRECTIONAL_KEY, '', 0, 0, false, 0); } catch {} return; }
         try { c.setExtensionPrompt(BIDIRECTIONAL_KEY, `[手机短信记忆 — 私密]\n${blocks}\n[结束]`, 0, 0, false, 0); } catch {}
