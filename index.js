@@ -184,9 +184,9 @@
             if (pmIsBigData(v)) {
                 await pmIDBSet('ST_SMS_BG_LOCAL_' + k, v);
                 ptr[k] = IDB_MARKER;
-            } else if (v) {
+            } else {
                 await pmIDBDel('ST_SMS_BG_LOCAL_' + k);
-                ptr[k] = v;
+                if (v !== undefined) ptr[k] = v; // 空字符串也写入，表示"已清除"
             }
         }
         try { localStorage.setItem('ST_SMS_BG_LOCAL', JSON.stringify(ptr)); } catch {}
@@ -791,7 +791,7 @@
         const ctxData = await gatherContext();
         const { cardDesc, cardPersonality, cardScenario, cardFirstMes, cardMesExample, mainChatText, worldBookText, userName, userDesc } = ctxData;
 
-        const smsHistoryText = conversationHistory.slice(-CONTEXT_LIMIT).map(m => {
+        const smsHistoryText = conversationHistory.slice(-CONTEXT_LIMIT, -1).map(m => {
             const clean = cleanResponse(m.content);
             return m.role === 'user' ? `${userName}：${clean}` : (isGroupChat ? clean : `${currentPersona}：${clean}`);
         }).join('\n');
