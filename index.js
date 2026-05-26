@@ -477,6 +477,10 @@
             });
             c.eventSource.on(et.CHAT_CHANGED || 'chat_id_changed', () => {
                 __pmLastChatLen = (c.chat || []).length;
+                // 修复：当酒馆主线切换角色/聊天时，强制关闭手机，防止下一次发短信存错 ID
+                if (phoneActive && typeof window.__pmEnd === 'function') {
+                    window.__pmEnd();
+                }
             });
         } catch (e) {}
 
@@ -1118,7 +1122,14 @@ ${currentPersona}：`;
 
             if (historyUpdated) {
                 if (!window.__pmHistories[id]) window.__pmHistories[id] = {};
-                window.__pmHistories[id][contactName] = targetHistory.slice(-SAVE_LIMIT);
+                const newHistory = targetHistory.slice(-SAVE_LIMIT);
+                window.__pmHistories[id][contactName] = newHistory;
+                
+                // 修复：如果当前正好在这个角色的界面，必须把最新的数组同步给全局的 conversationHistory
+                if (isActiveView) {
+                    conversationHistory = newHistory;
+                }
+                
                 saveHistories(); applyBidirectionalInjection();
                 
                 if (phoneActive && !isActiveView) {
