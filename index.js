@@ -71,7 +71,10 @@
     // ========== 短信历史双写存储 ==========
     function saveHistories() {
         pmIDBSet('ST_SMS_DATA_V2', window.__pmHistories).catch(() => {});
-        try { localStorage.setItem('ST_SMS_DATA_V2', JSON.stringify(window.__pmHistories)); } catch (e) {}
+        try { localStorage.setItem('ST_SMS_DATA_V2', JSON.stringify(window.__pmHistories)); } catch (e) {
+            // localStorage 容量不足时静默失败，IDB 是主存储，这里只记录日志
+            console.warn('[phone-mode] localStorage 已满，短信历史仅保存在 IDB');
+        }
     }
 
     async function loadHistoriesFromIDB() {
@@ -80,12 +83,15 @@
             if (!v) return;
             const parsed = typeof v === 'string' ? JSON.parse(v) : v;
             if (!parsed || typeof parsed !== 'object') return;
-            const lsCount = Object.keys(window.__pmHistories || {}).length;
             const idbCount = Object.keys(parsed).length;
-            if (idbCount >= lsCount) {
+            // 修复：IDB 是权威存储，只要有数据就直接使用，不依赖条数比较
+            // localStorage 可能因容量限制静默写入失败，导致保存的是旧版本
+            if (idbCount > 0) {
                 window.__pmHistories = parsed;
-                try { localStorage.setItem('ST_SMS_DATA_V2', JSON.stringify(parsed)); } catch (e) {}
-                if (idbCount > lsCount) console.log('[phone-mode] 从 IndexedDB 恢复了短信历史');
+                try { localStorage.setItem('ST_SMS_DATA_V2', JSON.stringify(parsed)); } catch (e) {
+                    console.warn('[phone-mode] localStorage 已满，仅使用 IDB 存储');
+                }
+                console.log('[phone-mode] 从 IndexedDB 加载了短信历史，共', idbCount, '个会话');
             }
         } catch (e) { console.warn('[phone-mode] IDB 恢复失败', e); }
     }
@@ -1274,6 +1280,9 @@ ${currentPersona}：`;
     };
 
     window.__pmPoke = async (contactName) => {
+        // 修复：先检查生成锁，再切换联系人，避免"界面已切换但函数直接 return"的幽灵切换问题
+        if (isGenerating) return;
+
         const id = getStorageId();
         if (window.__pmPokeConfig[id]?.[contactName]) {
             window.__pmPokeConfig[id][contactName].autoPoke.counter = 0;
@@ -1286,7 +1295,6 @@ ${currentPersona}：`;
             window.__pmSwitchContact(contactName);
         }
 
-        if (isGenerating) return;
         isGenerating = true;
 
         const input = phoneWindow?.querySelector('.pm-input');
@@ -1507,7 +1515,9 @@ ${currentPersona}：`;
                 conversationHistory.push({ role: 'assistant', content: contentParts.join('\n') });
                 const id = getStorageId();
                 if (!window.__pmHistories[id]) window.__pmHistories[id] = {};
-                window.__pmHistories[id][currentPersona] = conversationHistory.slice(-SAVE_LIMIT);
+                // 修复：群聊模式应用 currentGroupKey 作为存档 key，而非 currentPersona
+                const saveKey = isGroupChat && currentGroupKey ? currentGroupKey : currentPersona;
+                window.__pmHistories[id][saveKey] = conversationHistory.slice(-SAVE_LIMIT);
                 saveHistories();
                 applyBidirectionalInjection();
             }
@@ -2056,6 +2066,11 @@ ${currentPersona}：`;
         if (!key?.trim()) return; key = key.trim();
         loadGroupMeta();
         const id = getStorageId();
+        // 修复：如果上下文尚未就绪导致 ID 为 unknown，给出警告，避免存入错误 key
+        if (id === 'sms_unknown__default') {
+            console.warn('[phone-mode] __pmSwitchContact: SillyTavern 上下文尚未就绪，storageId 为 unknown，跳过切换');
+            return;
+        }
         const groupMeta = window.__pmGroupMeta[id]?.[key];
         if (groupMeta) {
             isGroupChat = true; currentGroupKey = key;
@@ -2184,14 +2199,32 @@ ${currentPersona}：`;
 
     window.__pmDeleteSelected = () => {
         const list = phoneWindow?.querySelector('.pm-msg-list'); if (!list) return;
-        const toDelete = new Set();
+        // 修复：收集要删除的气泡文本集合，同时记录对应的 conversationHistory 索引
+        // 避免"内容相同的消息全部被误删"的问题
+        const toDeleteTexts = new Set();
         list.querySelectorAll('.pm-select-wrap').forEach(wrap => {
             const cb = wrap.querySelector('.pm-custom-check');
-            if (cb?.dataset.checked === '1') { toDelete.add(wrap.dataset.text); wrap.remove(); }
+            if (cb?.dataset.checked === '1') { toDeleteTexts.add(wrap.dataset.text); wrap.remove(); }
             else { const b = wrap.querySelector('.pm-bubble, .pm-group-bubble-wrap'); if (b) wrap.parentNode.insertBefore(b, wrap); wrap.remove(); }
         });
-        if (toDelete.size > 0) {
-            conversationHistory = conversationHistory.filter(m => !m.content.split(/\s*\/\s*/).some(p => toDelete.has(p.trim())));
+        if (toDeleteTexts.size > 0) {
+            // 逐条匹配，每个 history 条目只删一次，避免重复内容被全部误删
+            const toRemoveIndices = new Set();
+            const usedTexts = new Map(); // text -> 已删除的次数
+            conversationHistory.forEach((m, i) => {
+                const parts = m.content.split(/\s*\/\s*/);
+                const matchedPart = parts.find(p => toDeleteTexts.has(p.trim()));
+                if (matchedPart) {
+                    const key = matchedPart.trim();
+                    const used = usedTexts.get(key) || 0;
+                    // 每条相同文本只删一次对应的 history 条目
+                    if (used < 1) {
+                        toRemoveIndices.add(i);
+                        usedTexts.set(key, used + 1);
+                    }
+                }
+            });
+            conversationHistory = conversationHistory.filter((_, i) => !toRemoveIndices.has(i));
             const id = getStorageId();
             if (!window.__pmHistories[id]) window.__pmHistories[id] = {};
             window.__pmHistories[id][currentPersona] = conversationHistory.slice(-SAVE_LIMIT);
@@ -2208,6 +2241,8 @@ ${currentPersona}：`;
         if (phoneWindow) { try { phoneWindow.hidePopover?.(); } catch (e) {} phoneWindow.remove(); }
         phoneWindow = null; phoneActive = false; isMinimized = false; isSelectMode = false;
         isGroupChat = false; groupMembers = []; groupColorMap = {}; groupDisplayName = ''; currentGroupKey = '';
+        // 修复：关闭时清除可见性定时器，重新开启时再创建新的
+        if (__pmVisibilityTimer) { clearInterval(__pmVisibilityTimer); __pmVisibilityTimer = null; }
     };
 
     function ensureVisibility() {
@@ -2219,10 +2254,13 @@ ${currentPersona}：`;
             phoneWindow.style.setProperty('opacity', '1', 'important');
         }
     }
-    setInterval(ensureVisibility, 2000);
+    // 修复：保存定时器 ID，在 __pmEnd 时清除，避免永久泄漏
+    let __pmVisibilityTimer = setInterval(ensureVisibility, 2000);
 
     window.__pmOpen = () => {
         if (phoneActive && phoneWindow) { try { phoneWindow.showPopover?.(); } catch (e) {} phoneWindow.style.display = 'flex'; ensureVisibility(); return; }
+        // 修复：重新打开时恢复可见性定时器
+        if (!__pmVisibilityTimer) { __pmVisibilityTimer = setInterval(ensureVisibility, 2000); }
         try { window.__pmHistories = JSON.parse(localStorage.getItem('ST_SMS_DATA_V2')) || {}; } catch (e) {}
         try {
             const saved = JSON.parse(localStorage.getItem('ST_SMS_CONFIG'));
@@ -2235,8 +2273,14 @@ ${currentPersona}：`;
             if (phoneWindow && currentPersona) {
                 const id = getStorageId();
                 const fresh = window.__pmHistories[id]?.[currentPersona];
-                if (fresh && fresh.length > conversationHistory.length) {
-                    window.__pmSwitch(currentPersona);
+                // 修复：用内容对比替代条数对比，避免"最新回复消失"问题
+                // localStorage 可能因容量静默失败，IDB 才是最新版本
+                if (fresh) {
+                    const freshJson = JSON.stringify(fresh);
+                    const curJson = JSON.stringify(conversationHistory);
+                    if (freshJson !== curJson) {
+                        window.__pmSwitch(currentPersona);
+                    }
                 }
             }
         });
@@ -2552,5 +2596,5 @@ ${currentPersona}：`;
     loadHistoriesFromIDB();
     setTimeout(() => { migrateOldHistory(); applyBidirectionalInjection(); hookGenerationEvent(); }, 1500);
 
-    console.log('[phone-mode] v9.4 已加载：新增“退还”卡片 + 导入导出按钮迁移至外观页');
+    console.log('[phone-mode] v9.4-fix 已加载：修复消息丢失/拍一拍竞态/误删/群聊存档/定时器泄漏/上下文未就绪等问题');
 })();
