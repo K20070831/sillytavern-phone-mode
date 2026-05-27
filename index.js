@@ -1012,6 +1012,7 @@ ${currentPersona}：`;
         }, 300);
     };
     // 打开长文本输入界面
+// 打开长文本输入界面
     window.__pmShowExpandInput = () => {
         const smallInput = phoneWindow?.querySelector('.pm-input');
         const currentText = smallInput ? smallInput.value : '';
@@ -1020,8 +1021,7 @@ ${currentPersona}：`;
 <div class="pm-modal pm-modal-wide">
   <div class="pm-modal-header">
     <b>长文本输入</b>
-    <span onclick="document.getElementById('pm-overlay').remove()" class="pm-modal-close">✕</span>
-  </div>
+    </div>
   <div style="padding:14px 16px;">
     <textarea id="pm-expanded-textarea" class="pm-cfg-input" rows="7" 
         style="height:auto; resize:none; font-size:14px; padding:10px; line-height:1.5; font-family:inherit;" 
