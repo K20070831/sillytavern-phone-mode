@@ -393,21 +393,39 @@
     }
 
     function migrateOldHistory() {
-        if (localStorage.getItem('ST_SMS_MIGRATED_V3')) return;
+        if (localStorage.getItem('ST_SMS_MIGRATED_V4')) return;
         const c = getCtx(); if (!c) return;
         try {
             const oldData = window.__pmHistories || {}, newData = {}; let migrated = 0;
             for (const oldKey of Object.keys(oldData)) {
-                if (oldKey.startsWith('sms_')) { newData[oldKey] = oldData[oldKey]; continue; }
-                const m = oldKey.match(/^(\d+)_(.+)$/);
-                if (!m) { newData[oldKey] = oldData[oldKey]; continue; }
-                const ch = c.characters?.[parseInt(m[1])];
-                if (ch?.avatar) { newData[`sms_${ch.avatar}__${m[2]}`] = oldData[oldKey]; migrated++; }
-                else newData[oldKey] = oldData[oldKey];
+                let newKey = oldKey;
+                if (oldKey.startsWith('sms_')) {
+                    // 修复：去掉旧格式中的 __chatId 后缀，对齐新版 getStorageId 格式
+                    newKey = oldKey.replace(/^(sms_[^_].+?)__.*$/, '$1');
+                } else {
+                    // 更旧的数字索引格式迁移
+                    const m = oldKey.match(/^(\d+)_(.+)$/);
+                    if (m) {
+                        const ch = c.characters?.[parseInt(m[1])];
+                        if (ch?.avatar) { newKey = `sms_${ch.avatar}`; migrated++; }
+                    }
+                }
+                if (!newData[newKey]) {
+                    newData[newKey] = oldData[oldKey];
+                } else {
+                    // 同一角色有多条旧记录（不同 chatId），合并保留条数更多的
+                    const merged = { ...newData[newKey] };
+                    for (const [persona, history] of Object.entries(oldData[oldKey] || {})) {
+                        if (!merged[persona] || (Array.isArray(history) && history.length > (merged[persona]?.length || 0))) {
+                            merged[persona] = history;
+                        }
+                    }
+                    newData[newKey] = merged;
+                }
             }
             window.__pmHistories = newData;
             saveHistories();
-            localStorage.setItem('ST_SMS_MIGRATED_V3', '1');
+            localStorage.setItem('ST_SMS_MIGRATED_V4', '1');
         } catch (e) {}
     }
 
@@ -1704,26 +1722,57 @@ ${currentPersona}：`;
         reader.onload = (e) => {
             try {
                 const data = JSON.parse(e.target.result);
-                if (data.histories) window.__pmHistories = data.histories;
+
+                // 修复：迁移旧格式 key（sms_avatar__chatId）到新格式（sms_avatar）
+                // 旧格式因为包含 chatId，导入后和当前 getStorageId() 返回的 key 不匹配，显示空白
+                function migrateKeys(obj) {
+                    if (!obj || typeof obj !== 'object') return obj;
+                    const result = {};
+                    for (const [key, value] of Object.entries(obj)) {
+                        // 匹配旧格式：sms_xxx__yyy，把 __yyy 部分去掉
+                        const newKey = key.replace(/^(sms_[^_].+?)__.*$/, '$1');
+                        if (newKey !== key) {
+                            // key 发生了变化，合并到新 key 下（保留条数更多的一方）
+                            const existing = result[newKey];
+                            if (!existing) {
+                                result[newKey] = value;
+                            } else {
+                                // 两个旧 chatId 都映射到同一个新 key，合并联系人，保留更新的记录
+                                const merged = { ...existing };
+                                for (const [persona, history] of Object.entries(value)) {
+                                    if (!merged[persona] || (Array.isArray(history) && history.length > (merged[persona]?.length || 0))) {
+                                        merged[persona] = history;
+                                    }
+                                }
+                                result[newKey] = merged;
+                            }
+                        } else {
+                            result[newKey] = value;
+                        }
+                    }
+                    return result;
+                }
+
+                if (data.histories) window.__pmHistories = migrateKeys(data.histories);
                 if (data.config) window.__pmConfig = data.config;
                 if (data.theme) window.__pmTheme = data.theme;
                 if (data.profiles) window.__pmProfiles = data.profiles;
-                if (data.groupMeta) window.__pmGroupMeta = data.groupMeta;
-                if (data.pokeConfig) window.__pmPokeConfig = data.pokeConfig;
-                if (data.bidirectional) window.__pmBidirectional = data.bidirectional;
-                
+                if (data.groupMeta) window.__pmGroupMeta = migrateKeys(data.groupMeta);
+                if (data.pokeConfig) window.__pmPokeConfig = migrateKeys(data.pokeConfig);
+                if (data.bidirectional) window.__pmBidirectional = migrateKeys(data.bidirectional);
+
                 saveHistories();
                 try { localStorage.setItem('ST_SMS_CONFIG', JSON.stringify(window.__pmConfig)); } catch(err) {}
                 saveTheme();
                 saveGroupMeta();
                 try { localStorage.setItem('ST_SMS_POKE_CONFIG', JSON.stringify(window.__pmPokeConfig)); } catch(err) {}
                 try { localStorage.setItem('ST_SMS_BIDIRECTIONAL', JSON.stringify(window.__pmBidirectional)); } catch(err) {}
-                
+
                 alert('✅ 数据导入成功！请重新打开短信界面生效。');
                 document.getElementById('pm-overlay')?.remove();
                 window.__pmEnd();
             } catch (err) {
-                alert('❌ 导入失败，文件格式不正确！\\n' + err.message);
+                alert('❌ 导入失败，文件格式不正确！\n' + err.message);
             }
         };
         reader.readAsText(file);
