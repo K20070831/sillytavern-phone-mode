@@ -136,6 +136,7 @@
     window.__pmPokeConfig = window.__pmPokeConfig || {};
     let __pmModelList = [];
     let __pmEventHooked = false;
+    let __pmFirstOpen = true;
 
     let phoneActive = false, phoneWindow = null, currentPersona = '', conversationHistory = [];
     let isGenerating = false, isMinimized = false, isSelectMode = false;
@@ -2354,28 +2355,17 @@ ${currentPersona}：`;
         bindIsland(phoneWindow, phoneWindow.querySelector('.pm-island'));
         applyTheme(); isGroupChat = false; groupMembers = []; groupColorMap = {}; groupDisplayName = ''; currentGroupKey = '';
 
-        // 修复：先等 IDB 加载完再渲染历史，避免冷启动时用空内存渲染后再刷新的闪烁问题
-        // 内存已有数据（热启动/叉掉重开）→ IDB 加载会用内容对比决定是否刷新
-        // 内存为空（冷启动/进程重启）→ IDB 加载完毕后才首次渲染，历史不会丢
-        const idbMemoryHasData = Object.keys(window.__pmHistories || {}).length > 0;
-        if (idbMemoryHasData) {
-            // 热启动：内存有数据，直接渲染，IDB 异步校验后如有差异再刷新
+
+        if (!__pmFirstOpen) {
+            // ✅ 热启动：只要不是本次刷新网页后的第一次打开，坚决信任内存，直接渲染！
             window.__pmSwitch(defaultChar);
             applyBidirectionalInjection(); ensureVisibility();
-            loadHistoriesFromIDB().then(() => {
-                if (!phoneWindow) return;
-                const id = getStorageId();
-                const fresh = window.__pmHistories[id]?.[currentPersona];
-                if (fresh) {
-                    const freshJson = JSON.stringify(fresh);
-                    const curJson = JSON.stringify(conversationHistory);
-                    if (freshJson !== curJson) window.__pmSwitch(currentPersona);
-                }
-            });
         } else {
-            // 冷启动：先展示加载提示，等 IDB 读完再渲染真实历史
+            // ❄️ 冷启动：第一次打开，先占位，等外部的 IDB 把最新数据拉进内存再渲染
+            __pmFirstOpen = false; // 翻转标记，此后不刷新就不会再走这里
             const list = phoneWindow?.querySelector('.pm-msg-list');
             if (list) { list.innerHTML = '<div style="text-align:center;color:#aaa;padding:20px;font-size:13px;">正在加载历史记录…</div>'; }
+            
             loadHistoriesFromIDB().then(() => {
                 if (!phoneWindow) return;
                 window.__pmSwitch(defaultChar);
@@ -2383,6 +2373,7 @@ ${currentPersona}：`;
             });
         }
     };
+    
 
     // ══════════════════════ CSS ══════════════════════
     if (!document.getElementById('pm-css')) {
