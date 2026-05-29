@@ -1283,7 +1283,8 @@ ${currentPersona}：`;
         set.images.push({ url, desc });
         saveEmojis();
         document.getElementById('pm-overlay').remove();
-        window.__pmRenderEmojiSetList();
+        // 修复1：添加完毕后留在设置-其他页，而不是关闭回到聊天
+        window.__pmShowConfig('other');
     };
 
     window.__pmDeleteEmojiImage = (si, ii) => {
@@ -1312,7 +1313,7 @@ ${currentPersona}：`;
                      style="cursor:pointer;width:60px;display:flex;flex-direction:column;align-items:center;gap:4px;">
                     <img src="${escapeAttr(img.url)}" style="width:50px;height:50px;object-fit:cover;border-radius:8px;box-shadow:0 2px 6px rgba(0,0,0,0.1);">
                     <span style="font-size:10px;color:#666;width:100%;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(img.desc)}</span>
-                </div>`).join('') : `<div style="text-align:center;color:#999;font-size:12px;padding:20px 0;">\xe6\x9c\xac\xe5\xa5\x97\xe6\x9a\x82\xe6\x97\xa0\xe5\x9b\xbe\xe7\x89\x87</div>`;
+                </div>`).join('') : '<div style="text-align:center;color:#999;font-size:12px;padding:20px 0;">本套暂无图片</div>';
             const el = document.getElementById('pm-emoji-picker-inner');
             if (el) {
                 el.querySelector('.pm-emoji-set-label').textContent = set.name + ' (' + set.images.length + ')';
@@ -1331,7 +1332,7 @@ ${currentPersona}：`;
                  style="cursor:pointer;width:60px;display:flex;flex-direction:column;align-items:center;gap:4px;">
                 <img src="${escapeAttr(img.url)}" style="width:50px;height:50px;object-fit:cover;border-radius:8px;box-shadow:0 2px 6px rgba(0,0,0,0.1);">
                 <span style="font-size:10px;color:#666;width:100%;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(img.desc)}</span>
-            </div>`).join('') : `<div style="text-align:center;color:#999;font-size:12px;padding:20px 0;">\xe6\x9c\xac\xe5\xa5\x97\xe6\x9a\x82\xe6\x97\xa0\xe5\x9b\xbe\xe7\x89\x87</div>`;
+            </div>`).join('') : '<div style="text-align:center;color:#999;font-size:12px;padding:20px 0;">本套暂无图片</div>';
         const initialDots = sets.length > 1 ? `<div style="display:flex;justify-content:center;gap:8px;padding:8px 0 4px;">${
             sets.map((s,i) => `<div onclick="window.__pmEmojiSetDot(${i})" style="width:8px;height:8px;border-radius:50%;cursor:pointer;background:${i===0?'#007aff':'#ddd'};"></div>`).join('')
         }</div>` : '';
@@ -1345,6 +1346,31 @@ ${currentPersona}：`;
   <div class="pm-emoji-imgs" style="padding:12px 14px;overflow-y:auto;max-height:340px;display:flex;flex-wrap:wrap;gap:10px;justify-content:flex-start;">${initialImgs}</div>
   <div class="pm-emoji-dots">${initialDots}</div>
 </div>`);
+
+        // 绑定滑动手势切换套组
+        setTimeout(() => {
+            const imgsEl = document.querySelector('#pm-emoji-picker-inner .pm-emoji-imgs');
+            if (!imgsEl || sets.length <= 1) return;
+            let touchStartX = 0, touchStartY = 0;
+            imgsEl.addEventListener('touchstart', e => {
+                touchStartX = e.touches[0].clientX;
+                touchStartY = e.touches[0].clientY;
+            }, { passive: true });
+            imgsEl.addEventListener('touchend', e => {
+                const dx = e.changedTouches[0].clientX - touchStartX;
+                const dy = e.changedTouches[0].clientY - touchStartY;
+                // 横向滑动距离 > 40px 且横向位移大于纵向才触发
+                if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) {
+                    if (dx < 0) {
+                        // 左滑：下一套
+                        window.__pmEmojiSetDot((activeSetIdx + 1) % sets.length);
+                    } else {
+                        // 右滑：上一套
+                        window.__pmEmojiSetDot((activeSetIdx - 1 + sets.length) % sets.length);
+                    }
+                }
+            }, { passive: true });
+        }, 50);
     };
 
     window.__pmInsertEmoji = (code) => {
@@ -2044,7 +2070,7 @@ ${currentPersona}：`;
     };
 
     // ========== 设置界面 ==========
-    window.__pmShowConfig = async () => {
+    window.__pmShowConfig = async (initialTab) => {
         loadProfiles(); loadTheme();
         await loadBgSettings();
         const cfg = window.__pmConfig, t = window.__pmTheme;
@@ -2176,6 +2202,7 @@ ${currentPersona}：`;
     <button onclick="window.__pmSaveConfig()" style="width:100%;background:#007aff;color:#fff;border:none;border-radius:10px;padding:10px;font-size:13px;cursor:pointer;font-weight:600;">保存配置</button>
   </div>
 </div>`);
+        if (initialTab) setTimeout(() => window.__pmSwitchTab(initialTab), 0);
     };
 
     window.__pmSwitchTab = (tab) => {
