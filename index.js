@@ -1241,7 +1241,7 @@ ${currentPersona}：`;
 <div class="pm-modal">
   <div class="pm-modal-header">
     <b>添加图片 — ${escapeHtml(set.name)}</b>
-    <span onclick="document.getElementById('pm-overlay').remove()" class="pm-modal-close">✕</span>
+    <span onclick="document.getElementById('pm-overlay').remove();window.__pmShowConfig('other');" class="pm-modal-close">✕</span>
   </div>
   <div style="padding:14px 16px;display:flex;flex-direction:column;gap:10px;">
     <div style="font-size:12px;color:#888;margin-bottom:2px;">图片 URL 或本地上传</div>
@@ -1554,9 +1554,9 @@ ${currentPersona}：`;
         <b>${escapeHtml(contactName)} 设置</b>
         <span onclick="window.__pmSaveAndCloseContactConfig('${safeJS(contactName)}')" class="pm-modal-close">✕</span>
     </div>
-    <div style="padding:16px;display:flex;flex-direction:column;gap:16px;">
+    <div style="padding:16px;display:flex;flex-direction:column;gap:10px;">
         ${emojiCheckHtml}
-        <div>
+        <div style="padding-top:4px;">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
             <span style="font-size:13px;font-weight:600;">⏰ 自动发消息</span>
             <div onclick="window.__pmToggleAutoPoke('${safeJS(contactName)}')"
@@ -1749,7 +1749,7 @@ ${currentPersona}：`;
 
         const emojiCheckHtml = window.__pmEmojis.length ? `
         <div style="padding-top:12px;border-top:1px solid #f0f0f0;">
-            <div class="pm-cfg-label" style="margin-bottom:8px;">😀 允许 AI 使用的表情包套组</div>
+            <div class="pm-cfg-label" style="margin-bottom:8px;">🥰 允许 AI 使用的表情包套组</div>
             <div style="display:flex;flex-direction:column;gap:10px;max-height:120px;overflow-y:auto;background:#fafafa;border-radius:8px;padding:10px;border:1px solid #eee;">
                 ${window.__pmEmojis.map(set => `
                     <div style="display:flex;align-items:center;gap:10px;cursor:pointer;"
@@ -1777,7 +1777,7 @@ ${currentPersona}：`;
 
         ${mode === 'edit' ? `
         ${emojiCheckHtml}
-        <div style="margin-top:6px;padding-top:16px;border-top:1px solid #f0f0f0;">
+        <div style="margin-top:2px;padding-top:12px;border-top:1px solid #f0f0f0;">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
             <span style="font-size:13px;font-weight:600;">⏰ 自动发消息</span>
             <div onclick="window.__pmToggleAutoPokeGroup()"
