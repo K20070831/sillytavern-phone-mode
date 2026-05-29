@@ -134,6 +134,17 @@
     window.__pmBgLocal = window.__pmBgLocal || {};
     window.__pmGroupMeta = window.__pmGroupMeta || {};
     window.__pmPokeConfig = window.__pmPokeConfig || {};
+    window.__pmEmojis = window.__pmEmojis || []; // [{id, name, images:[{url,desc},...]}]
+
+    async function loadEmojis() {
+        try {
+            const v = await pmIDBGet('ST_SMS_EMOJIS');
+            window.__pmEmojis = Array.isArray(v) ? v : [];
+        } catch(e) { window.__pmEmojis = []; }
+    }
+    async function saveEmojis() {
+        await pmIDBSet('ST_SMS_EMOJIS', window.__pmEmojis).catch(()=>{});
+    }
     let __pmModelList = [];
     let __pmEventHooked = false;
     let __pmFirstOpen = true;
@@ -382,6 +393,15 @@
     const KW_PATTERN = Object.keys(SPECIAL_KEYWORDS).join('|');
     const SPECIAL_RE = new RegExp(`[\\(（]\\s*(${KW_PATTERN})\\s*[+：:\\s]*([^)）]+)[\\)）]`, 'gi');
     function normalizeKeyword(k) { return SPECIAL_KEYWORDS[k] || SPECIAL_KEYWORDS[k.toLowerCase()] || k; }
+    // [emo:套组名:序号] 格式，AI 和用户都可以发送
+    const EMO_RE = /\[emo:([^\]:]+):(\d+)\]/gi;
+    // 查找表情包图片：先按套组名+序号精确匹配，返回 url 或 null
+    function findEmojiUrl(setName, idx) {
+        const set = window.__pmEmojis.find(s => s.name === setName);
+        if (!set) return null;
+        const img = set.images[idx - 1]; // 序号从1开始
+        return img ? img.url : null;
+    }
 
     function getStorageId() {
         const c = getCtx(); if (!c) return 'sms_unknown__default';
@@ -449,6 +469,15 @@
     function loadBidirectional() { try { window.__pmBidirectional = JSON.parse(localStorage.getItem('ST_SMS_BIDIRECTIONAL')) || {}; } catch (e) { window.__pmBidirectional = {}; } }
     function saveBidirectional() { try { localStorage.setItem('ST_SMS_BIDIRECTIONAL', JSON.stringify(window.__pmBidirectional)); } catch (e) {} }
 
+    // 把 [emo:套组名:序号] 替换成描述文字，用于注入主楼上下文
+    function resolveEmojiText(text) {
+        return (text || '').replace(/\[emo:([^\]:]+):(\d+)\]/g, (match, setName, idx) => {
+            const set = window.__pmEmojis.find(s => s.name === setName);
+            const img = set?.images[parseInt(idx) - 1];
+            return img ? `(表情:${img.desc})` : '';
+        });
+    }
+
     function applyBidirectionalInjection() {
         const c = getCtx(); if (!c || typeof c.setExtensionPrompt !== 'function') return;
         const userName = getUserPersona().name || '用户';
@@ -462,13 +491,13 @@
             if (name.startsWith('__group_')) {
                 const meta = groups[name]; if (!meta) return '';
                 const lines = conv.map(m => {
-                    const t = (m.content || '').replace(/\s*\/\s*/g, '。').replace(/\n/g, '；');
+                    const t = resolveEmojiText((m.content || '').replace(/\s*\/\s*/g, '。').replace(/\n/g, '；'));
                     return m.role === 'user' ? `${userName}：${t}` : t;
                 }).join('\n');
                 return `【群聊"${meta.name}"（成员：${meta.members.join('、')}）的最近聊天 — 仅参与者与 ${userName} 知晓，其他角色不应知情】\n${lines}`;
             }
             const lines = conv.map(m => { 
-                const t = (m.content || '').replace(/\s*\/\s*/g, '。'); 
+                const t = resolveEmojiText((m.content || '').replace(/\s*\/\s*/g, '。')); 
                 return m.role === 'user' ? `${userName}：${t}` : `${name}：${t}`; 
             }).join('\n');
             return `【与 ${name} 的短信 — 仅 ${name} 与 ${userName} 知晓】\n${lines}`;
@@ -637,6 +666,20 @@
         return null;
     }
 
+    // 生成表情包提示词\uff0c格式 [emo:套组名:序号]
+    function getEmojiPrompt(contactKey) {
+        const id = getStorageId();
+        const assignedIds = window.__pmPokeConfig[id]?.[contactKey]?.emojis || [];
+        if (!assignedIds.length) return '';
+        const sets = window.__pmEmojis.filter(s => assignedIds.includes(s.id));
+        if (!sets.length) return '';
+        const lines = sets.map(s =>
+            s.images.map((img, i) => `[emo:${s.name}:${i+1}] - ${img.desc}`).join('\n')
+        ).join('\n');
+        return `\n\n[表情包权限]
+你可以在合适时机使用以下表情包，使用格式 [emo:套组名:序号] 独行发送：\n${lines}\n请在自然语境下适当使用，严禁自生新格式。]`;
+    }
+
     function createBubbles(text, side, senderName) {
         const results = [];
         const re = new RegExp(SPECIAL_RE.source, 'gi');
@@ -706,6 +749,23 @@
         }
         if (last < text.length) pushPlain(text.slice(last));
         if (!results.length) pushPlain(text);
+        // 最后再对所有末尾文本气泡对 [emo:...] 进行单翻替换
+        results.forEach(bubble => {
+            const els = bubble.classList?.contains('pm-group-bubble-wrap')
+                ? bubble.querySelectorAll('.pm-bubble')
+                : (bubble.classList?.contains('pm-bubble') ? [bubble] : []);
+            els.forEach(el => {
+                if (!el.innerHTML.includes('[emo:')) return;
+                el.innerHTML = el.innerHTML.replace(/\[emo:([^\]:]+):(\d+)\]/g, (match, sName, sIdx) => {
+                    const url = findEmojiUrl(sName, parseInt(sIdx));
+                    if (url) return `<img src="${url.replace(/"/g,'&quot;')}" style="max-width:98px;border-radius:8px;display:block;box-shadow:0 2px 8px rgba(0,0,0,0.15);vertical-align:middle;">`;
+                    return `<span style="font-size:12px;color:#999;">🤔[${sName}:${sIdx}]</span>`;
+                });
+                el.style.background = el.querySelector('img') && el.childNodes.length===1 ? 'transparent' : '';
+                el.style.boxShadow = el.querySelector('img') && el.childNodes.length===1 ? 'none' : '';
+                el.style.padding = el.querySelector('img') && el.childNodes.length===1 ? '0' : '';
+            });
+        });
         return results;
     }
 
@@ -936,6 +996,10 @@ ${currentPersona}：`;
         }
 
         const antiFluff = '【务必直接按格式输出短信内容，严禁在开头输出“好的”、“下面是”等任何说明性废话，严禁输出非角色的语言。】';
+        // 注入表情包提示词
+        const targetContactKey = isGroupChat ? currentGroupKey : currentPersona;
+        const emojiPrompt = getEmojiPrompt(targetContactKey);
+        if (emojiPrompt) { systemPrompt += emojiPrompt; injectedInstruction += emojiPrompt; }
         systemPrompt += `\n\n${antiFluff}`;
         injectedInstruction += `\n\n${antiFluff}`;
 
@@ -1059,21 +1123,21 @@ ${currentPersona}：`;
 
         makeOverlay(`
 <div class="pm-modal pm-modal-wide">
-  <div class="pm-modal-header">
+  <div class="pm-modal-header" style="justify-content:space-between;padding-right:14px;">
     <b>长文本输入</b>
-    </div>
+    <span onclick="document.getElementById('pm-overlay').remove()" class="pm-modal-close">✕</span>
+  </div>
   <div style="padding:14px 16px;">
     <textarea id="pm-expanded-textarea" class="pm-cfg-input" rows="7" 
         style="height:auto; resize:none; font-size:14px; padding:10px; line-height:1.5; font-family:inherit;" 
         placeholder="在这里输入多行文本...">${escapeAttr(currentText)}</textarea>
   </div>
   <div class="pm-modal-add" style="display:flex;gap:8px;">
-    <button onclick="document.getElementById('pm-overlay').remove()" style="flex:1;background:#f0f0f0;color:#333;border:none;border-radius:10px;padding:10px;font-size:13px;cursor:pointer;">取消</button>
-    <button onclick="window.__pmConfirmExpandInput()" style="flex:1;background:#007aff;color:#fff;border:none;border-radius:10px;padding:10px;font-size:13px;cursor:pointer;font-weight:600;">发送</button>
+    <button onclick="window.__pmShowEmojiPicker()" style="flex:2;background:#f0f0f3;color:#333;border:1px solid #ddd;border-radius:10px;padding:10px;font-size:14px;cursor:pointer;font-weight:600;">(^ ^)</button>
+    <button onclick="window.__pmConfirmExpandInput()" style="flex:8;background:#007aff;color:#fff;border:none;border-radius:10px;padding:10px;font-size:13px;cursor:pointer;font-weight:600;">发送</button>
   </div>
 </div>`);
 
-        // 自动聚焦并将光标移到文本末尾
         setTimeout(() => {
             const ta = document.getElementById('pm-expanded-textarea');
             if (ta) {
@@ -1098,6 +1162,205 @@ ${currentPersona}：`;
             }
         }
     };
+    // ===== 表情包管理 =====
+
+    window.__pmRenderEmojiSetList = () => {
+        const container = document.getElementById('pm-emoji-set-list');
+        if (!container) return;
+        const sets = window.__pmEmojis;
+        if (!sets.length) {
+            container.innerHTML = '<div style="text-align:center;color:#aaa;font-size:13px;padding:16px 0;">暂无表情包套组</div>';
+            return;
+        }
+        container.innerHTML = sets.map((set, si) => `
+            <div style="background:#fafafa;border:1px solid #eee;border-radius:10px;padding:10px 12px;margin-bottom:8px;">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+                    <span style="font-weight:600;font-size:13px;color:#222;">${escapeHtml(set.name)}</span>
+                    <div style="display:flex;gap:6px;">
+                        <button onclick="window.__pmAddEmojiImage(${si})" style="font-size:11px;background:#007aff;color:#fff;border:none;border-radius:6px;padding:4px 8px;cursor:pointer;">➕图片</button>
+                        <button onclick="window.__pmDeleteEmojiSet(${si})" style="font-size:11px;background:#ff3b30;color:#fff;border:none;border-radius:6px;padding:4px 8px;cursor:pointer;">删除</button>
+                    </div>
+                </div>
+                <div style="display:flex;flex-wrap:wrap;gap:8px;">
+                    ${set.images.map((img, ii) => `
+                        <div style="position:relative;width:52px;">
+                            <img src="${escapeAttr(img.url)}" style="width:52px;height:52px;object-fit:cover;border-radius:8px;border:1px solid #eee;">
+                            <div style="font-size:9px;color:#888;text-align:center;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;width:52px;">${escapeHtml(img.desc)}</div>
+                            <span onclick="window.__pmDeleteEmojiImage(${si},${ii})" style="position:absolute;top:-4px;right:-4px;background:#ff3b30;color:#fff;border-radius:50%;width:16px;height:16px;font-size:10px;display:flex;align-items:center;justify-content:center;cursor:pointer;line-height:1;">×</span>
+                        </div>
+                    `).join('')}
+                    ${set.images.length===0?'<span style="font-size:12px;color:#aaa;">暂无图片</span>':''}
+                </div>
+                <div style="font-size:11px;color:#aaa;margin-top:4px;">${set.images.length}/20 张 · [emo:${escapeHtml(set.name)}:1~${set.images.length}]</div>
+            </div>
+        `).join('');
+    };
+
+    window.__pmAddEmojiSet = () => {
+        if (window.__pmEmojis.length >= 10) return alert('最多只能创建 10 个套组。');
+        makeOverlay(`
+<div class="pm-modal">
+  <div class="pm-modal-header">
+    <b>新建表情包套组</b>
+    <span onclick="document.getElementById('pm-overlay').remove()" class="pm-modal-close">✕</span>
+  </div>
+  <div style="padding:14px 16px;display:flex;flex-direction:column;gap:10px;">
+    <input id="pm-new-set-name" class="pm-cfg-input" placeholder="套组名称（如：开心、日常、可爱）" style="padding:8px 10px;font-size:13px;border-radius:8px;border:1px solid #ddd;">
+  </div>
+  <div class="pm-modal-add">
+    <button onclick="window.__pmConfirmAddEmojiSet()" style="width:100%;background:#007aff;color:#fff;border:none;border-radius:10px;padding:10px;font-size:13px;cursor:pointer;font-weight:600;">确认</button>
+  </div>
+</div>`);
+        setTimeout(() => document.getElementById('pm-new-set-name')?.focus(), 10);
+    };
+
+    window.__pmConfirmAddEmojiSet = () => {
+        const name = document.getElementById('pm-new-set-name')?.value.trim();
+        if (!name) return alert('套组名称不能为空。');
+        if (window.__pmEmojis.some(s => s.name === name)) return alert('该名称已存在。');
+        window.__pmEmojis.push({ id: 'emo_' + Date.now(), name, images: [] });
+        saveEmojis();
+        document.getElementById('pm-overlay').remove();
+        window.__pmRenderEmojiSetList();
+    };
+
+    window.__pmDeleteEmojiSet = (si) => {
+        const set = window.__pmEmojis[si];
+        if (!set) return;
+        if (!confirm(`确认删除套组「${set.name}」？`)) return;
+        window.__pmEmojis.splice(si, 1);
+        saveEmojis();
+        window.__pmRenderEmojiSetList();
+    };
+
+    window.__pmAddEmojiImage = (si) => {
+        const set = window.__pmEmojis[si];
+        if (!set) return;
+        if (set.images.length >= 20) return alert('本套组已满 20 张。');
+        makeOverlay(`
+<div class="pm-modal">
+  <div class="pm-modal-header">
+    <b>添加图片 — ${escapeHtml(set.name)}</b>
+    <span onclick="document.getElementById('pm-overlay').remove()" class="pm-modal-close">✕</span>
+  </div>
+  <div style="padding:14px 16px;display:flex;flex-direction:column;gap:10px;">
+    <div style="font-size:12px;color:#888;margin-bottom:2px;">图片 URL 或本地上传</div>
+    <input id="pm-emo-url" class="pm-cfg-input" placeholder="https://... 或点下方选择文件" style="padding:8px 10px;font-size:13px;border-radius:8px;border:1px solid #ddd;">
+    <button onclick="document.getElementById('pm-emo-file').click()" style="background:#f0f0f3;color:#333;border:1px solid #ddd;border-radius:8px;padding:8px 10px;font-size:12px;cursor:pointer;">📁 上传本地图片</button>
+    <input id="pm-emo-file" type="file" accept="image/*" hidden onchange="window.__pmEmoFileRead(${si},this)">
+    <div id="pm-emo-preview" style="display:none;text-align:center;"><img id="pm-emo-preview-img" style="max-width:120px;max-height:120px;border-radius:10px;border:1px solid #eee;"></div>
+    <input id="pm-emo-desc" class="pm-cfg-input" placeholder="图片描述（必填，如：猫猫开心）" style="padding:8px 10px;font-size:13px;border-radius:8px;border:1px solid #ddd;">
+    <div style="font-size:11px;color:#aaa;">描述将告诉 AI 这张图在什么情形下使用</div>
+  </div>
+  <div class="pm-modal-add">
+    <button onclick="window.__pmConfirmAddEmojiImage(${si})" style="width:100%;background:#007aff;color:#fff;border:none;border-radius:10px;padding:10px;font-size:13px;cursor:pointer;font-weight:600;">确认添加</button>
+  </div>
+</div>`);
+        setTimeout(() => document.getElementById('pm-emo-url')?.focus(), 10);
+    };
+
+    window.__pmEmoFileRead = (si, input) => {
+        const file = input.files?.[0]; if (!file) return;
+        const reader = new FileReader();
+        reader.onload = e => {
+            const url = e.target.result;
+            const urlInput = document.getElementById('pm-emo-url');
+            if (urlInput) urlInput.value = url;
+            const prev = document.getElementById('pm-emo-preview');
+            const prevImg = document.getElementById('pm-emo-preview-img');
+            if (prev && prevImg) { prevImg.src = url; prev.style.display = 'block'; }
+        };
+        reader.readAsDataURL(file);
+    };
+
+    window.__pmConfirmAddEmojiImage = (si) => {
+        const url = document.getElementById('pm-emo-url')?.value.trim();
+        const desc = document.getElementById('pm-emo-desc')?.value.trim();
+        if (!url) return alert('请输入图片 URL 或上传图片。');
+        if (!desc) return alert('请输入图片描述（必填）。');
+        const set = window.__pmEmojis[si];
+        if (!set) return;
+        set.images.push({ url, desc });
+        saveEmojis();
+        document.getElementById('pm-overlay').remove();
+        window.__pmRenderEmojiSetList();
+    };
+
+    window.__pmDeleteEmojiImage = (si, ii) => {
+        const set = window.__pmEmojis[si];
+        if (!set) return;
+        set.images.splice(ii, 1);
+        saveEmojis();
+        window.__pmRenderEmojiSetList();
+    };
+
+    window.__pmShowEmojiPicker = () => {
+        if (!window.__pmEmojis.length) return alert('\xe8\xbf\x98\xe6\xb2\xa1\xe6\x9c\x89\xe8\xa1\xa8\xe6\x83\x85\xe5\x8c\x85\xef\xbc\x81\xe8\xaf\xb7\xe5\x85\x88\xe5\x8e\xbb\xe3\x80\x90\xe8\xae\xbe\xe7\xbd\xae-\xe5\x85\xb6\xe4\xbb\x96\xe3\x80\x91\xe4\xb8\xad\xe6\xb7\xbb\xe5\x8a\xa0\xe3\x80\x82');
+        const ta = document.getElementById('pm-expanded-textarea');
+        window.__pmTempText = ta ? ta.value : '';
+        let activeSetIdx = 0;
+
+        function renderPicker() {
+            const sets = window.__pmEmojis;
+            const set = sets[activeSetIdx] || sets[0];
+            if (!set) return;
+            const dotsHtml = sets.length > 1 ? `<div style="display:flex;justify-content:center;gap:8px;padding:8px 0 4px;">${
+                sets.map((s, i) => `<div onclick="window.__pmEmojiSetDot(${i})" style="width:8px;height:8px;border-radius:50%;cursor:pointer;background:${i===activeSetIdx?'#007aff':'#ddd'};transition:background 0.2s;"></div>`).join('')
+            }</div>` : '';
+            const imgsHtml = set.images.length ? set.images.map((img, i) => `
+                <div onclick="window.__pmInsertEmoji('[emo:${escapeAttr(set.name)}:${i+1}]')"
+                     style="cursor:pointer;width:60px;display:flex;flex-direction:column;align-items:center;gap:4px;">
+                    <img src="${escapeAttr(img.url)}" style="width:50px;height:50px;object-fit:cover;border-radius:8px;box-shadow:0 2px 6px rgba(0,0,0,0.1);">
+                    <span style="font-size:10px;color:#666;width:100%;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(img.desc)}</span>
+                </div>`).join('') : `<div style="text-align:center;color:#999;font-size:12px;padding:20px 0;">\xe6\x9c\xac\xe5\xa5\x97\xe6\x9a\x82\xe6\x97\xa0\xe5\x9b\xbe\xe7\x89\x87</div>`;
+            const el = document.getElementById('pm-emoji-picker-inner');
+            if (el) {
+                el.querySelector('.pm-emoji-set-label').textContent = set.name + ' (' + set.images.length + ')';
+                el.querySelector('.pm-emoji-imgs').innerHTML = imgsHtml;
+                el.querySelector('.pm-emoji-dots').innerHTML = dotsHtml;
+                el.querySelectorAll('.pm-emoji-set-dot-btn').forEach((d,i)=>d.style.background=i===activeSetIdx?'#007aff':'#ddd');
+            }
+        }
+
+        window.__pmEmojiSetDot = (idx) => { activeSetIdx = idx; renderPicker(); };
+
+        const sets = window.__pmEmojis;
+        const set0 = sets[0];
+        const initialImgs = set0?.images.length ? set0.images.map((img,i)=>`
+            <div onclick="window.__pmInsertEmoji('[emo:${escapeAttr(set0.name)}:${i+1}]')"
+                 style="cursor:pointer;width:60px;display:flex;flex-direction:column;align-items:center;gap:4px;">
+                <img src="${escapeAttr(img.url)}" style="width:50px;height:50px;object-fit:cover;border-radius:8px;box-shadow:0 2px 6px rgba(0,0,0,0.1);">
+                <span style="font-size:10px;color:#666;width:100%;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(img.desc)}</span>
+            </div>`).join('') : `<div style="text-align:center;color:#999;font-size:12px;padding:20px 0;">\xe6\x9c\xac\xe5\xa5\x97\xe6\x9a\x82\xe6\x97\xa0\xe5\x9b\xbe\xe7\x89\x87</div>`;
+        const initialDots = sets.length > 1 ? `<div style="display:flex;justify-content:center;gap:8px;padding:8px 0 4px;">${
+            sets.map((s,i) => `<div onclick="window.__pmEmojiSetDot(${i})" style="width:8px;height:8px;border-radius:50%;cursor:pointer;background:${i===0?'#007aff':'#ddd'};"></div>`).join('')
+        }</div>` : '';
+
+        makeOverlay(`
+<div class="pm-modal pm-modal-wide" id="pm-emoji-picker-inner">
+  <div class="pm-modal-header" style="justify-content:space-between;padding-right:14px;">
+    <b class="pm-emoji-set-label">${escapeHtml(set0?.name||'')} (${set0?.images.length||0})</b>
+    <span onclick="document.getElementById('pm-overlay').remove();window.__pmShowExpandInput();" class="pm-modal-close">✕</span>
+  </div>
+  <div class="pm-emoji-imgs" style="padding:12px 14px;overflow-y:auto;max-height:340px;display:flex;flex-wrap:wrap;gap:10px;justify-content:flex-start;">${initialImgs}</div>
+  <div class="pm-emoji-dots">${initialDots}</div>
+</div>`);
+    };
+
+    window.__pmInsertEmoji = (code) => {
+        const text = window.__pmTempText || '';
+        document.getElementById('pm-overlay').remove();
+        window.__pmShowExpandInput();
+        const ta = document.getElementById('pm-expanded-textarea');
+        if (ta) {
+            const sep = (text && !text.endsWith(' ') && !text.endsWith('\n')) ? '' : '';
+            ta.value = text + sep + code + ' ';
+            window.__pmTempText = ta.value;
+            ta.focus();
+            ta.selectionStart = ta.selectionEnd = ta.value.length;
+        }
+    };
+
     window.__pmIncrementCounters = () => {
         const id = getStorageId();
         const configs = window.__pmPokeConfig[id];
@@ -1239,6 +1502,25 @@ ${currentPersona}：`;
         const config = window.__pmPokeConfig[id]?.[contactName] || {
             autoPoke: { enabled: false, interval: 3, counter: 0 }
         };
+        const assignedEmojis = config.emojis || [];
+
+        const emojiCheckHtml = window.__pmEmojis.length ? `
+        <div style="margin-bottom:8px;border-bottom:1px solid #f0f0f0;padding-bottom:14px;">
+            <div class="pm-cfg-label" style="margin-bottom:8px;">🥰 允许 AI 使用的表情包套组</div>
+            <div style="display:flex;flex-direction:column;gap:10px;max-height:130px;overflow-y:auto;background:#fafafa;border-radius:8px;padding:10px;border:1px solid #eee;">
+                ${window.__pmEmojis.map(set => `
+                    <div style="display:flex;align-items:center;gap:10px;cursor:pointer;"
+                         onclick="this.querySelector('.pm-emoji-assign-check').classList.toggle('is-checked')">
+                        <div class="pm-custom-check pm-bi-style pm-emoji-assign-check ${assignedEmojis.includes(set.id)?'is-checked':''}"
+                             data-id="${escapeAttr(set.id)}"
+                             style="width:20px;height:20px;min-width:20px;flex-shrink:0;margin-bottom:0;"></div>
+                        <span style="font-size:13px;color:#333;">${escapeHtml(set.name)}</span>
+                        <span style="color:#aaa;font-size:11px;margin-left:auto;">(${set.images.length}张)</span>
+                    </div>
+                `).join('')}
+            </div>
+            <div style="font-size:11px;color:#aaa;margin-top:4px;">勾选后 AI 会知道如何使用这些表情</div>
+        </div>` : '';
 
         makeOverlay(`
     <div class="pm-modal pm-modal-wide">
@@ -1247,6 +1529,7 @@ ${currentPersona}：`;
         <span onclick="window.__pmSaveAndCloseContactConfig('${safeJS(contactName)}')" class="pm-modal-close">✕</span>
     </div>
     <div style="padding:16px;display:flex;flex-direction:column;gap:16px;">
+        ${emojiCheckHtml}
         <div>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
             <span style="font-size:13px;font-weight:600;">⏰ 自动发消息</span>
@@ -1281,6 +1564,8 @@ ${currentPersona}：`;
     window.__pmSaveAndCloseContactConfig = (contactName) => {
         const checkEl = document.getElementById('pm-poke-check');
         const intervalEl = document.getElementById('pm-poke-interval');
+        const emojiChecks = document.querySelectorAll('.pm-emoji-assign-check.is-checked');
+        const selectedEmojis = Array.from(emojiChecks).map(cb => cb.dataset.id);
 
         if (checkEl && intervalEl) {
             const id = getStorageId();
@@ -1295,7 +1580,8 @@ ${currentPersona}：`;
                     enabled,
                     interval: Math.max(1, Math.min(99, interval)),
                     counter: enabled ? Math.min(oldCounter, interval - 1) : oldCounter
-                }
+                },
+                emojis: selectedEmojis
             };
             savePokeConfig();
         }
@@ -1428,10 +1714,29 @@ ${currentPersona}：`;
             : "window.__pmSaveAndCloseGroupEdit()";
 
         let pokeConfig = { enabled: false, interval: 3, counter: 0 };
+        let assignedEmojis = [];
         if (mode === 'edit' && currentGroupKey) {
             const id = getStorageId();
             pokeConfig = window.__pmPokeConfig[id]?.[currentGroupKey]?.autoPoke || pokeConfig;
+            assignedEmojis = window.__pmPokeConfig[id]?.[currentGroupKey]?.emojis || [];
         }
+
+        const emojiCheckHtml = window.__pmEmojis.length ? `
+        <div style="padding-top:12px;border-top:1px solid #f0f0f0;">
+            <div class="pm-cfg-label" style="margin-bottom:8px;">😀 允许 AI 使用的表情包套组</div>
+            <div style="display:flex;flex-direction:column;gap:10px;max-height:120px;overflow-y:auto;background:#fafafa;border-radius:8px;padding:10px;border:1px solid #eee;">
+                ${window.__pmEmojis.map(set => `
+                    <div style="display:flex;align-items:center;gap:10px;cursor:pointer;"
+                         onclick="this.querySelector('.pm-emoji-assign-check').classList.toggle('is-checked')">
+                        <div class="pm-custom-check pm-bi-style pm-emoji-assign-check ${assignedEmojis.includes(set.id) ? 'is-checked' : ''}"
+                             data-id="${escapeAttr(set.id)}"
+                             style="width:20px;height:20px;min-width:20px;flex-shrink:0;margin-bottom:0;"></div>
+                        <span style="font-size:13px;color:#333;">${escapeHtml(set.name)}</span>
+                        <span style="color:#aaa;font-size:11px;margin-left:auto;">(${set.images.length}张)</span>
+                    </div>
+                `).join('')}
+            </div>
+        </div>` : '';
 
         makeOverlay(`
     <div class="pm-modal pm-modal-wide">
@@ -1445,6 +1750,7 @@ ${currentPersona}：`;
         <div id="pm-group-preview" style="display:flex;flex-wrap:wrap;gap:4px;"></div>
 
         ${mode === 'edit' ? `
+        ${emojiCheckHtml}
         <div style="margin-top:6px;padding-top:16px;border-top:1px solid #f0f0f0;">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
             <span style="font-size:13px;font-weight:600;">⏰ 自动发消息</span>
@@ -1585,6 +1891,8 @@ ${currentPersona}：`;
 
             const checkEl = document.getElementById('pm-poke-check-group');
             const intervalEl = document.getElementById('pm-poke-interval-group');
+            const emojiChecks = document.querySelectorAll('.pm-emoji-assign-check.is-checked');
+            const selectedEmojis = Array.from(emojiChecks).map(cb => cb.dataset.id);
 
             if (checkEl && intervalEl) {
                 const id = getStorageId();
@@ -1599,7 +1907,8 @@ ${currentPersona}：`;
                         enabled,
                         interval: Math.max(1, Math.min(99, interval)),
                         counter: enabled ? Math.min(oldCounter, interval - 1) : oldCounter
-                    }
+                    },
+                    emojis: selectedEmojis
                 };
 
                 savePokeConfig();
@@ -1687,7 +1996,8 @@ ${currentPersona}：`;
             profiles: window.__pmProfiles || [],
             groupMeta: window.__pmGroupMeta || {},
             pokeConfig: window.__pmPokeConfig || {},
-            bidirectional: window.__pmBidirectional || {}
+            bidirectional: window.__pmBidirectional || {},
+            emojis: window.__pmEmojis || []
         };
         const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
@@ -1713,6 +2023,7 @@ ${currentPersona}：`;
                 if (data.groupMeta) window.__pmGroupMeta = data.groupMeta;
                 if (data.pokeConfig) window.__pmPokeConfig = data.pokeConfig;
                 if (data.bidirectional) window.__pmBidirectional = data.bidirectional;
+                if (data.emojis) { window.__pmEmojis = data.emojis; saveEmojis(); }
 
                 saveHistories();
                 try { localStorage.setItem('ST_SMS_CONFIG', JSON.stringify(window.__pmConfig)); } catch(err) {}
@@ -1765,6 +2076,7 @@ ${currentPersona}：`;
   <div class="pm-cfg-tabs">
     <div class="pm-cfg-tab pm-cfg-tab-active" data-tab="api" onclick="window.__pmSwitchTab('api')">API</div>
     <div class="pm-cfg-tab" data-tab="look" onclick="window.__pmSwitchTab('look')">外观</div>
+    <div class="pm-cfg-tab" data-tab="other" onclick="window.__pmSwitchTab('other')">其他</div>
   </div>
   <div class="pm-modal-scroll">
     <div id="pm-tab-api" class="pm-tab-pane">
@@ -1839,6 +2151,15 @@ ${currentPersona}：`;
           </div>
         </div>
       </div>
+      <div style="height:12px;"></div>
+    </div>
+    <div id="pm-tab-other" class="pm-tab-pane" style="display:none;">
+      <div style="padding:14px 16px 12px;">
+        <div class="pm-cfg-label" style="margin-bottom:10px;">🥰 表情包管理</div>
+        <div id="pm-emoji-set-list"></div>
+        <button onclick="window.__pmAddEmojiSet()" style="width:100%;margin-top:8px;background:#007aff;color:#fff;border:none;border-radius:10px;padding:10px;font-size:13px;cursor:pointer;font-weight:600;">➕ 添加新套组</button>
+        <div class="pm-cfg-tip" style="text-align:left;margin-top:6px;">最多 10 套，每套最多 20 张图片</div>
+      </div>
       <div style="padding:12px 16px 12px;border-top:1px solid #f0f0f0;">
         <div class="pm-cfg-label" style="margin-bottom:10px;">📦 数据备份</div>
         <div style="display:flex;gap:6px;">
@@ -1862,7 +2183,7 @@ ${currentPersona}：`;
         document.querySelectorAll('.pm-tab-pane').forEach(el => el.style.display = 'none');
         const pane = document.getElementById(`pm-tab-${tab}`);
         if (pane) pane.style.display = 'block';
-        // 删除了此处动态隐藏按钮的代码，完美解决跳动问题！
+        if (tab === 'other') window.__pmRenderEmojiSetList();
     };
 
     window.__pmSetPreset = (p) => {
@@ -2309,7 +2630,7 @@ ${currentPersona}：`;
             window.__pmConfig = saved || { apiUrl: '', apiKey: '', model: '', useIndependent: false };
             if (typeof window.__pmConfig.useIndependent === 'undefined') window.__pmConfig.useIndependent = !!(window.__pmConfig.apiUrl && window.__pmConfig.apiKey);
         } catch (e) { window.__pmConfig = { apiUrl: '', apiKey: '', model: '', useIndependent: false }; }
-        loadProfiles(); loadBidirectional(); loadTheme(); loadGroupMeta(); loadPokeConfig(); migrateOldHistory();
+        loadProfiles(); loadBidirectional(); loadTheme(); loadGroupMeta(); loadPokeConfig(); migrateOldHistory(); loadEmojis();
         loadBgSettings().then(() => { try { applyBackground(); } catch (e) {} });
         hookGenerationEvent();
         const c = getCtx(), defaultChar = c?.characters?.[c.characterId]?.name ?? 'AI';
@@ -2357,16 +2678,22 @@ ${currentPersona}：`;
 
 
         if (!__pmFirstOpen) {
-            // ✅ 热启动：只要不是本次刷新网页后的第一次打开，坚决信任内存，直接渲染！
-            window.__pmSwitch(defaultChar);
-            applyBidirectionalInjection(); ensureVisibility();
+            // 热启动：信任内存历史直接渲染，但表情包可能因为插件重载而清空，需确保已加载
+            const doRender = () => { window.__pmSwitch(defaultChar); applyBidirectionalInjection(); ensureVisibility(); };
+            if (window.__pmEmojis.length > 0) {
+                doRender();
+            } else {
+                loadEmojis().then(doRender);
+            }
         } else {
             // ❄️ 冷启动：第一次打开，先占位，等外部的 IDB 把最新数据拉进内存再渲染
             __pmFirstOpen = false; // 翻转标记，此后不刷新就不会再走这里
             const list = phoneWindow?.querySelector('.pm-msg-list');
             if (list) { list.innerHTML = '<div style="text-align:center;color:#aaa;padding:20px;font-size:13px;">正在加载历史记录…</div>'; }
             
-            loadHistoriesFromIDB().then(() => {
+            // 冷启动：表情包和历史记录都需要从 IDB 加载完才能正确渲染
+            // 否则 [emo:...] 会因为 __pmEmojis 为空而显示占位符
+            Promise.all([loadHistoriesFromIDB(), loadEmojis()]).then(() => {
                 if (!phoneWindow) return;
                 window.__pmSwitch(defaultChar);
                 applyBidirectionalInjection(); ensureVisibility();
@@ -2607,6 +2934,8 @@ ${currentPersona}：`;
     #pm-iphone.is-min{inset:auto 20px 20px auto !important;margin:0 !important;transform:none !important;width:120px !important;min-width:120px !important;max-width:120px !important;height:44px !important;min-height:44px !important;max-height:44px !important;border-width:5px !important;border-radius:22px !important;}
     .pm-modal,.pm-modal-wide{width:min(320px,94vw) !important;max-height:90vh !important;max-height:90dvh !important;}
 }
+.pm-modal-close{cursor:pointer;font-size:16px;color:#999;padding:2px 6px;line-height:1;user-select:none;border-radius:50%;transition:background 0.15s;}
+.pm-modal-close:active{background:#f0f0f0;}
         `;
         document.head.appendChild(s);
     }
