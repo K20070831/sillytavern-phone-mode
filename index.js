@@ -677,7 +677,7 @@
             s.images.map((img, i) => `[emo:${s.name}:${i+1}] - ${img.desc}`).join('\n')
         ).join('\n');
         return `\n\n[表情包权限]
-你可以在合适时机使用以下表情包，使用格式 [emo:套组名:序号] 独行发送：\n${lines}\n请在自然语境下适当使用，严禁自生新格式。]`;
+你可以在合适时机使用以下表情包，使用格式 [emo:套组名:序号] 独行发送：\n${lines}\n请在自然语境下适当使用，严禁自生新格式。`;
     }
 
     function createBubbles(text, side, senderName) {
@@ -1095,19 +1095,26 @@ ${currentPersona}：`;
         isGenerating = true; input.disabled = true;
         const btn = phoneWindow.querySelector('.pm-up-btn'); if (btn) btn.disabled = true;
         showTyping();
-        const result = await fetchSMS(val);
-        hideTyping();
-        if (result.type === 'group') {
-            for (const block of result.data) {
-                for (const s of block.sentences) {
-                    await new Promise(r => setTimeout(r, 120));
-                    addBubble(s, 'left', block.name);
+        try {
+            const result = await fetchSMS(val);
+            hideTyping();
+            if (result.type === 'group') {
+                for (const block of result.data) {
+                    for (const s of block.sentences) {
+                        await new Promise(r => setTimeout(r, 120));
+                        addBubble(s, 'left', block.name);
+                    }
                 }
+            } else {
+                for (const s of result.data) { await new Promise(r => setTimeout(r, 150)); addBubble(s, 'left'); }
             }
-        } else {
-            for (const s of result.data) { await new Promise(r => setTimeout(r, 150)); addBubble(s, 'left'); }
+        } catch(e) {
+            hideTyping();
+            addNote(`（发送失败：${e?.message || e}）`);
+            console.error('[phone-mode] __pmSend 异常', e);
+        } finally {
+            isGenerating = false; input.disabled = false; if (btn) btn.disabled = false; input.focus();
         }
-        isGenerating = false; input.disabled = false; if (btn) btn.disabled = false; input.focus();
 
         setTimeout(() => {
             if (!isGenerating && typeof window.__pmIncrementCounters === 'function') {
@@ -1198,11 +1205,14 @@ ${currentPersona}：`;
 
     window.__pmAddEmojiSet = () => {
         if (window.__pmEmojis.length >= 10) return alert('最多只能创建 10 个套组。');
-        makeOverlay(`
+        const ov = document.createElement('div'); ov.id = 'pm-overlay-sub';
+        if (typeof HTMLElement !== 'undefined' && HTMLElement.prototype.hasOwnProperty('popover')) ov.setAttribute('popover', 'manual');
+        ov.style.cssText = 'position:fixed !important; inset:0 !important; margin:0 !important; padding:0 !important; border:none !important; width:100vw !important; height:100vh !important; max-width:none !important; max-height:none !important; background:rgba(0,0,0,.45) !important; z-index:2147483648 !important; display:flex !important; align-items:center !important; justify-content:center !important;';
+        ov.innerHTML = `
 <div class="pm-modal">
   <div class="pm-modal-header">
     <b>新建表情包套组</b>
-    <span onclick="document.getElementById('pm-overlay').remove()" class="pm-modal-close">✕</span>
+    <span onclick="document.getElementById('pm-overlay-sub').remove()" class="pm-modal-close">✕</span>
   </div>
   <div style="padding:14px 16px;display:flex;flex-direction:column;gap:10px;">
     <input id="pm-new-set-name" class="pm-cfg-input" placeholder="套组名称（如：开心、日常、可爱）" style="padding:8px 10px;font-size:13px;border-radius:8px;border:1px solid #ddd;">
@@ -1210,7 +1220,10 @@ ${currentPersona}：`;
   <div class="pm-modal-add">
     <button onclick="window.__pmConfirmAddEmojiSet()" style="width:100%;background:#007aff;color:#fff;border:none;border-radius:10px;padding:10px;font-size:13px;cursor:pointer;font-weight:600;">确认</button>
   </div>
-</div>`);
+</div>`;
+        ov.addEventListener('click', e => { if (e.target === ov) ov.remove(); });
+        document.body.appendChild(ov);
+        if (ov.showPopover) try { ov.showPopover(); } catch (e) {}
         setTimeout(() => document.getElementById('pm-new-set-name')?.focus(), 10);
     };
 
@@ -1220,7 +1233,7 @@ ${currentPersona}：`;
         if (window.__pmEmojis.some(s => s.name === name)) return alert('该名称已存在。');
         window.__pmEmojis.push({ id: 'emo_' + Date.now(), name, images: [] });
         saveEmojis();
-        document.getElementById('pm-overlay').remove();
+        document.getElementById('pm-overlay-sub')?.remove(); // 关键修改：只关闭当前弹窗
         window.__pmRenderEmojiSetList();
     };
 
@@ -1237,11 +1250,15 @@ ${currentPersona}：`;
         const set = window.__pmEmojis[si];
         if (!set) return;
         if (set.images.length >= 20) return alert('本套组已满 20 张。');
-        makeOverlay(`
+        
+        const ov = document.createElement('div'); ov.id = 'pm-overlay-sub';
+        if (typeof HTMLElement !== 'undefined' && HTMLElement.prototype.hasOwnProperty('popover')) ov.setAttribute('popover', 'manual');
+        ov.style.cssText = 'position:fixed !important; inset:0 !important; margin:0 !important; padding:0 !important; border:none !important; width:100vw !important; height:100vh !important; max-width:none !important; max-height:none !important; background:rgba(0,0,0,.45) !important; z-index:2147483648 !important; display:flex !important; align-items:center !important; justify-content:center !important;';
+        ov.innerHTML = `
 <div class="pm-modal">
   <div class="pm-modal-header">
     <b>添加图片 — ${escapeHtml(set.name)}</b>
-    <span onclick="document.getElementById('pm-overlay').remove();window.__pmShowConfig('other');" class="pm-modal-close">✕</span>
+    <span onclick="document.getElementById('pm-overlay-sub').remove();" class="pm-modal-close">✕</span>
   </div>
   <div style="padding:14px 16px;display:flex;flex-direction:column;gap:10px;">
     <div style="font-size:12px;color:#888;margin-bottom:2px;">图片 URL 或本地上传</div>
@@ -1255,7 +1272,10 @@ ${currentPersona}：`;
   <div class="pm-modal-add">
     <button onclick="window.__pmConfirmAddEmojiImage(${si})" style="width:100%;background:#007aff;color:#fff;border:none;border-radius:10px;padding:10px;font-size:13px;cursor:pointer;font-weight:600;">确认添加</button>
   </div>
-</div>`);
+</div>`;
+        ov.addEventListener('click', e => { if (e.target === ov) ov.remove(); });
+        document.body.appendChild(ov);
+        if (ov.showPopover) try { ov.showPopover(); } catch (e) {}
         setTimeout(() => document.getElementById('pm-emo-url')?.focus(), 10);
     };
 
@@ -1282,9 +1302,8 @@ ${currentPersona}：`;
         if (!set) return;
         set.images.push({ url, desc });
         saveEmojis();
-        document.getElementById('pm-overlay').remove();
-        // 修复1：添加完毕后留在设置-其他页，而不是关闭回到聊天
-        window.__pmShowConfig('other');
+        document.getElementById('pm-overlay-sub')?.remove(); // 关键修改：只关闭当前弹窗
+        window.__pmRenderEmojiSetList();
     };
 
     window.__pmDeleteEmojiImage = (si, ii) => {
@@ -1313,7 +1332,7 @@ ${currentPersona}：`;
                      style="cursor:pointer;width:60px;display:flex;flex-direction:column;align-items:center;gap:4px;">
                     <img src="${escapeAttr(img.url)}" style="width:50px;height:50px;object-fit:cover;border-radius:8px;box-shadow:0 2px 6px rgba(0,0,0,0.1);">
                     <span style="font-size:10px;color:#666;width:100%;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(img.desc)}</span>
-                </div>`).join('') : '<div style="text-align:center;color:#999;font-size:12px;padding:20px 0;">本套暂无图片</div>';
+                </div>`).join('') : `<div style="text-align:center;color:#999;font-size:12px;padding:20px 0;">\xe6\x9c\xac\xe5\xa5\x97\xe6\x9a\x82\xe6\x97\xa0\xe5\x9b\xbe\xe7\x89\x87</div>`;
             const el = document.getElementById('pm-emoji-picker-inner');
             if (el) {
                 el.querySelector('.pm-emoji-set-label').textContent = set.name + ' (' + set.images.length + ')';
@@ -1332,7 +1351,7 @@ ${currentPersona}：`;
                  style="cursor:pointer;width:60px;display:flex;flex-direction:column;align-items:center;gap:4px;">
                 <img src="${escapeAttr(img.url)}" style="width:50px;height:50px;object-fit:cover;border-radius:8px;box-shadow:0 2px 6px rgba(0,0,0,0.1);">
                 <span style="font-size:10px;color:#666;width:100%;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(img.desc)}</span>
-            </div>`).join('') : '<div style="text-align:center;color:#999;font-size:12px;padding:20px 0;">本套暂无图片</div>';
+            </div>`).join('') : `<div style="text-align:center;color:#999;font-size:12px;padding:20px 0;">\xe6\x9c\xac\xe5\xa5\x97\xe6\x9a\x82\xe6\x97\xa0\xe5\x9b\xbe\xe7\x89\x87</div>`;
         const initialDots = sets.length > 1 ? `<div style="display:flex;justify-content:center;gap:8px;padding:8px 0 4px;">${
             sets.map((s,i) => `<div onclick="window.__pmEmojiSetDot(${i})" style="width:8px;height:8px;border-radius:50%;cursor:pointer;background:${i===0?'#007aff':'#ddd'};"></div>`).join('')
         }</div>` : '';
@@ -1346,31 +1365,6 @@ ${currentPersona}：`;
   <div class="pm-emoji-imgs" style="padding:12px 14px;overflow-y:auto;max-height:340px;display:flex;flex-wrap:wrap;gap:10px;justify-content:flex-start;">${initialImgs}</div>
   <div class="pm-emoji-dots">${initialDots}</div>
 </div>`);
-
-        // 绑定滑动手势切换套组
-        setTimeout(() => {
-            const imgsEl = document.querySelector('#pm-emoji-picker-inner .pm-emoji-imgs');
-            if (!imgsEl || sets.length <= 1) return;
-            let touchStartX = 0, touchStartY = 0;
-            imgsEl.addEventListener('touchstart', e => {
-                touchStartX = e.touches[0].clientX;
-                touchStartY = e.touches[0].clientY;
-            }, { passive: true });
-            imgsEl.addEventListener('touchend', e => {
-                const dx = e.changedTouches[0].clientX - touchStartX;
-                const dy = e.changedTouches[0].clientY - touchStartY;
-                // 横向滑动距离 > 40px 且横向位移大于纵向才触发
-                if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) {
-                    if (dx < 0) {
-                        // 左滑：下一套
-                        window.__pmEmojiSetDot((activeSetIdx + 1) % sets.length);
-                    } else {
-                        // 右滑：上一套
-                        window.__pmEmojiSetDot((activeSetIdx - 1 + sets.length) % sets.length);
-                    }
-                }
-            }, { passive: true });
-        }, 50);
     };
 
     window.__pmInsertEmoji = (code) => {
@@ -1450,9 +1444,12 @@ ${currentPersona}：`;
         }).join('\n');
 
         const systemPrompt = isGroup ? `你同时扮演群聊中的所有成员。\n【务必直接按格式输出短信内容，严禁在开头输出“好的”等废话。】` : `你正在扮演"${contactName}"通过手机短信与用户 ${userName} 聊天。\n【务必直接按格式输出短信内容，严禁在开头输出“好的”等废话。】`;
-        const userPrompt = isGroup
+        // 修复：注入表情包提示词（与 fetchSMS 保持一致）
+        const emojiPrompt = getEmojiPrompt(contactName);
+        const userPrompt = (isGroup
             ? `群聊名称：${groupMeta.name}\n群聊成员：${groupMeta.members.join('、')}\n\n用户有一段时间没有说话。请以所有群成员的身份，根据各自的性格、人设和当前聊天上下文，自然地发起话题或继续聊天。每个成员根据人设决定发言 0-8 句。\n\n输出格式：角色名：消息 / 消息\n\n【用户信息】\n${userBlock}\n\n【角色设定】\n${cardDesc || ''}\n\n【性格】\n${cardPersonality || ''}\n\n【场景】\n${cardScenario || ''}\n\n【世界书】\n${worldBookText || ''}\n\n【主线最近对话】\n${mainChatText || ''}\n\n【群聊历史】\n${smsHistoryText}`
-            : `用户有一段时间没有回复。作为${contactName}，根据你的人设和当前聊天情境，自然地发送 3-8 句短信继续对话或发起新话题，不要提及用户没有回复这件事。\n\n【用户信息】\n${userBlock}\n\n【角色设定】\n${cardDesc || ''}\n\n【性格】\n${cardPersonality || ''}\n\n【场景】\n${cardScenario || ''}\n\n【对话示例】\n${cardMesExample || ''}\n\n【世界书】\n${worldBookText || ''}\n\n【主线最近对话】\n${mainChatText || ''}\n\n【短信对话历史】\n${smsHistoryText}\n\n输出格式：短信内容 / 短信内容（每句用 / 分隔，特殊格式中文单行闭合）`;
+            : `用户有一段时间没有回复。作为${contactName}，根据你的人设和当前聊天情境，自然地发送 3-8 句短信继续对话或发起新话题，不要提及用户没有回复这件事。\n\n【用户信息】\n${userBlock}\n\n【角色设定】\n${cardDesc || ''}\n\n【性格】\n${cardPersonality || ''}\n\n【场景】\n${cardScenario || ''}\n\n【对话示例】\n${cardMesExample || ''}\n\n【世界书】\n${worldBookText || ''}\n\n【主线最近对话】\n${mainChatText || ''}\n\n【短信对话历史】\n${smsHistoryText}\n\n输出格式：短信内容 / 短信内容（每句用 / 分隔，特殊格式中文单行闭合）`)
+            + (emojiPrompt ? emojiPrompt : '');
 
         try {
             const raw = await callAI(systemPrompt, userPrompt);
@@ -1554,9 +1551,9 @@ ${currentPersona}：`;
         <b>${escapeHtml(contactName)} 设置</b>
         <span onclick="window.__pmSaveAndCloseContactConfig('${safeJS(contactName)}')" class="pm-modal-close">✕</span>
     </div>
-    <div style="padding:16px;display:flex;flex-direction:column;gap:10px;">
+    <div style="padding:16px;display:flex;flex-direction:column;gap:8px;">
         ${emojiCheckHtml}
-        <div style="padding-top:4px;">
+        <div style="margin-top:-6px;">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
             <span style="font-size:13px;font-weight:600;">⏰ 自动发消息</span>
             <div onclick="window.__pmToggleAutoPoke('${safeJS(contactName)}')"
@@ -1708,7 +1705,9 @@ ${currentPersona}：`;
             if (historyUpdated) {
                 const id = getStorageId();
                 if (!window.__pmHistories[id]) window.__pmHistories[id] = {};
-                window.__pmHistories[id][currentPersona] = conversationHistory.slice(-SAVE_LIMIT);
+                // 修复：群聊模式应使用 currentGroupKey 作为存档 key，而非 currentPersona
+                const saveKey = isGroupChat && currentGroupKey ? currentGroupKey : currentPersona;
+                window.__pmHistories[id][saveKey] = conversationHistory.slice(-SAVE_LIMIT);
                 saveHistories();
                 applyBidirectionalInjection();
             }
@@ -1777,7 +1776,7 @@ ${currentPersona}：`;
 
         ${mode === 'edit' ? `
         ${emojiCheckHtml}
-        <div style="margin-top:2px;padding-top:12px;border-top:1px solid #f0f0f0;">
+        <div style="margin-top:0px;padding-top:8px;border-top:1px solid #f0f0f0;">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
             <span style="font-size:13px;font-weight:600;">⏰ 自动发消息</span>
             <div onclick="window.__pmToggleAutoPokeGroup()"
@@ -1824,6 +1823,8 @@ ${currentPersona}：`;
 
     window.__pmPokeGroup = async () => {
         if (!isGroupChat || !currentGroupKey) return;
+        // 修复：先检查生成锁，再移除 overlay，避免弹窗关闭但函数直接 return 的状态不一致
+        if (isGenerating) return;
 
         const id = getStorageId();
         if (window.__pmPokeConfig[id]?.[currentGroupKey]) {
@@ -1833,7 +1834,6 @@ ${currentPersona}：`;
 
         document.getElementById('pm-overlay')?.remove();
 
-        if (isGenerating) return;
         isGenerating = true;
 
         const input = phoneWindow?.querySelector('.pm-input');
@@ -2070,7 +2070,7 @@ ${currentPersona}：`;
     };
 
     // ========== 设置界面 ==========
-    window.__pmShowConfig = async (initialTab) => {
+    window.__pmShowConfig = async () => {
         loadProfiles(); loadTheme();
         await loadBgSettings();
         const cfg = window.__pmConfig, t = window.__pmTheme;
@@ -2202,7 +2202,6 @@ ${currentPersona}：`;
     <button onclick="window.__pmSaveConfig()" style="width:100%;background:#007aff;color:#fff;border:none;border-radius:10px;padding:10px;font-size:13px;cursor:pointer;font-weight:600;">保存配置</button>
   </div>
 </div>`);
-        if (initialTab) setTimeout(() => window.__pmSwitchTab(initialTab), 0);
     };
 
     window.__pmSwitchTab = (tab) => {
