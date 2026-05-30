@@ -926,7 +926,7 @@
             const img = set?.images?.[parseInt(idxStr, 10) - 1];
             return img?.desc ? `[表情包：${img.desc}]` : '[表情包]';
         }).replace(/\s{2,}/g, ' ').trim();
-        conversationHistory.push({ role: 'user', content: userMsgClean });
+        conversationHistory.push({ role: 'user', content: userMsg }); // 存原始内容，保留 [emo:] 用于渲染
         const ctxData = await gatherContext();
         const { cardDesc, cardPersonality, cardScenario, cardFirstMes, cardMesExample, mainChatText, worldBookText, userName, userDesc } = ctxData;
 
@@ -1106,13 +1106,19 @@ ${currentPersona}：`;
         }
     }
 
-    function addBubble(text, side, senderName) {
+    function addBubble(text, side, senderName, historyIndex) {
         const list = phoneWindow?.querySelector('.pm-msg-list'); if (!list) return;
         createBubbles(text, side, senderName).forEach(b => {
-            if (b.classList?.contains('pm-bubble')) { b.dataset.side = side; b.dataset.text = text; }
-            else if (b.classList?.contains('pm-group-bubble-wrap')) {
+            if (b.classList?.contains('pm-bubble')) {
                 b.dataset.side = side; b.dataset.text = text;
-                const inner = b.querySelector('.pm-bubble'); if (inner) { inner.dataset.side = side; inner.dataset.text = text; }
+                if (historyIndex !== undefined) b.dataset.historyIndex = historyIndex;
+            } else if (b.classList?.contains('pm-group-bubble-wrap')) {
+                b.dataset.side = side; b.dataset.text = text;
+                if (historyIndex !== undefined) b.dataset.historyIndex = historyIndex;
+                const inner = b.querySelector('.pm-bubble'); if (inner) {
+                    inner.dataset.side = side; inner.dataset.text = text;
+                    if (historyIndex !== undefined) inner.dataset.historyIndex = historyIndex;
+                }
             }
             list.appendChild(b);
         });
@@ -1152,22 +1158,33 @@ ${currentPersona}：`;
             if (after) parts.push(after);
             return parts.length ? parts : [chunk];
         });
-        userBubbles.forEach(chunk => addBubble(chunk, 'right'));
+        // 先渲染用户气泡，fetchSMS push 后回填 historyIndex
+        const pendingUserBubbles = [];
+        userBubbles.forEach(chunk => {
+            addBubble(chunk, 'right');
+            const list = phoneWindow?.querySelector('.pm-msg-list');
+            const allBubbles = list?.querySelectorAll('.pm-bubble[data-side="right"], .pm-group-bubble-wrap[data-side="right"]');
+            if (allBubbles?.length) pendingUserBubbles.push(allBubbles[allBubbles.length - 1]);
+        });
         isGenerating = true; input.disabled = true;
         const btn = phoneWindow.querySelector('.pm-up-btn'); if (btn) btn.disabled = true;
         showTyping();
         try {
             const result = await fetchSMS(val);
             hideTyping();
+            // 回填用户气泡的 historyIndex（fetchSMS 内已 push，下标为 length-2 或 length-1）
+            const userHi = conversationHistory.length - (result ? 2 : 1);
+            pendingUserBubbles.forEach(b => { b.dataset.historyIndex = userHi; const inner = b.querySelector('.pm-bubble'); if(inner) inner.dataset.historyIndex = userHi; });
+            const aiHi = conversationHistory.length - 1;
             if (result.type === 'group') {
                 for (const block of result.data) {
                     for (const s of block.sentences) {
                         await new Promise(r => setTimeout(r, 120));
-                        addBubble(s, 'left', block.name);
+                        addBubble(s, 'left', block.name, aiHi);
                     }
                 }
             } else {
-                for (const s of result.data) { await new Promise(r => setTimeout(r, 150)); addBubble(s, 'left'); }
+                for (const s of result.data) { await new Promise(r => setTimeout(r, 150)); addBubble(s, 'left', undefined, aiHi); }
             }
             // 逐泡保存：渲染完毕后立即落盘，不等 finally，防止挂起丢失
             { const _id = getStorageId(); if (!window.__pmHistories[_id]) window.__pmHistories[_id] = {};
@@ -1539,7 +1556,8 @@ ${currentPersona}：`;
                     if (block.sentences.length > 0) {
                         contentParts.push(`${block.name}：${block.sentences.join(' / ')}`);
                         if (isActiveView) {
-                            for (const s of block.sentences) { await new Promise(r => setTimeout(r, 120)); addBubble(s, 'left', block.name); }
+                            const _pgHi = targetHistory.length; // push 之前的长度即为新条目下标
+                            for (const s of block.sentences) { await new Promise(r => setTimeout(r, 120)); addBubble(s, 'left', block.name, _pgHi); }
                         }
                     }
                 }
@@ -1554,9 +1572,10 @@ ${currentPersona}：`;
                     targetHistory.push({ role: 'assistant', content: sentences.join(' / ') });
                     historyUpdated = true;
                     if (isActiveView) {
+                        const _pokeHi = targetHistory.length - 1;
                         for (const s of sentences) {
                             await new Promise(r => setTimeout(r, 150));
-                            addBubble(s, 'left');
+                            addBubble(s, 'left', undefined, _pokeHi);
                             // 逐句落盘：每渲染一句立即保存，防止挂起丢失
                             { const _id = getStorageId(); if (!window.__pmHistories[_id]) window.__pmHistories[_id] = {};
                               window.__pmHistories[_id][isGroupChat && currentGroupKey ? currentGroupKey : currentPersona] = targetHistory.slice(-SAVE_LIMIT);
@@ -1954,12 +1973,12 @@ ${currentPersona}：`;
                     contentParts.push(`${block.name}：${block.sentences.join(' / ')}`);
                     for (const s of block.sentences) {
                         await new Promise(r => setTimeout(r, 120));
-                        addBubble(s, 'left', block.name);
+                        addBubble(s, 'left', block.name, conversationHistory.length); // +1 after push below
                     }
                     // 每个成员说完话立即落盘，防止后续 block 渲染途中挂起
+                    conversationHistory.push({ role: 'assistant', content: contentParts[contentParts.length - 1] });
                     { const _id = getStorageId(); if (!window.__pmHistories[_id]) window.__pmHistories[_id] = {};
                       const _key = isGroupChat && currentGroupKey ? currentGroupKey : currentPersona;
-                      conversationHistory.push({ role: 'assistant', content: contentParts[contentParts.length - 1] });
                       window.__pmHistories[_id][_key] = conversationHistory.slice(-SAVE_LIMIT);
                       saveHistories(); }
                 }
@@ -2598,20 +2617,20 @@ ${currentPersona}：`;
             const list = phoneWindow.querySelector('.pm-msg-list'); list.innerHTML = '';
             if (conversationHistory.length > 0) {
                 addNote(`历史记录`);
-                conversationHistory.forEach(m => {
+                conversationHistory.forEach((m, hi) => {
                     if (isGroupChat && m.role === 'assistant') {
                         const lines = m.content.split('\n');
                         for (const line of lines) {
                             const match = line.match(/^(.{1,20})[：:]\s*(.+)$/);
                             if (match && groupMembers.some(gm => gm.toLowerCase() === match[1].trim().toLowerCase())) {
                                 const sender = groupMembers.find(gm => gm.toLowerCase() === match[1].trim().toLowerCase());
-                                splitToSentences(match[2]).forEach(s => addBubble(s, 'left', sender));
+                                splitToSentences(match[2]).forEach(s => addBubble(s, 'left', sender, hi));
                             } else {
-                                splitToSentences(line).forEach(s => addBubble(s, 'left'));
+                                splitToSentences(line).forEach(s => addBubble(s, 'left', undefined, hi));
                             }
                         }
                     } else {
-                        splitToSentences(m.content).forEach(s => addBubble(s, m.role === 'user' ? 'right' : 'left'));
+                        splitToSentences(m.content).forEach(s => addBubble(s, m.role === 'user' ? 'right' : 'left', undefined, hi));
                     }
                 });
                 addNote('── 以上为历史 ──');
@@ -2653,24 +2672,10 @@ ${currentPersona}：`;
         if (!list) return;
         if (isSelectMode) {
             trashBtn.style.color = '#ff3b30'; confirmBar.style.display = 'flex';
-            // 进入选择模式时，把每个气泡对应的 conversationHistory 下标打进 wrap，
-            // 后续删除按下标操作，彻底避免文本匹配失败导致历史删不干净的问题
-            const bubbles = Array.from(list.querySelectorAll('.pm-bubble, .pm-group-bubble-wrap'))
-                .filter(b => b.id !== 'pm-typing' && !b.closest('.pm-select-wrap'));
-            // 构建气泡→history下标的映射：遍历 conversationHistory，按顺序给气泡分配下标
-            let histIdx = 0;
-            let bubbleIdx = 0;
-            const bubbleHistMap = new Map(); // bubble element → history index
-            for (let hi = 0; hi < conversationHistory.length && bubbleIdx < bubbles.length; hi++) {
-                const m = conversationHistory[hi];
-                // 一条 history 对应若干气泡（splitToSentences 的结果数量）
-                const parts = m.content.split(/\s*\/\s*/).filter(Boolean);
-                const count = parts.length || 1;
-                for (let k = 0; k < count && bubbleIdx < bubbles.length; k++, bubbleIdx++) {
-                    bubbleHistMap.set(bubbles[bubbleIdx], hi);
-                }
-            }
-            bubbles.forEach(b => {
+            // 气泡上已在渲染时打好 data-history-index，直接读取，无需事后映射
+            list.querySelectorAll('.pm-bubble, .pm-group-bubble-wrap')
+                .forEach(b => {
+                if (b.id === 'pm-typing' || b.closest('.pm-select-wrap')) return;
                 const wrap = document.createElement('div'); wrap.className = 'pm-select-wrap';
                 wrap.style.cssText = 'display:flex;align-items:center;gap:8px;align-self:' + (b.dataset.side === 'right' ? 'flex-end' : 'flex-start') + ';';
                 const cb = document.createElement('div'); cb.className = 'pm-custom-check'; cb.dataset.checked = '0';
@@ -2679,8 +2684,9 @@ ${currentPersona}：`;
                 b.parentNode.insertBefore(wrap, b);
                 wrap.appendChild(cb); wrap.appendChild(b);
                 wrap.dataset.side = b.dataset.side || ''; wrap.dataset.text = b.dataset.text || '';
-                const hi = bubbleHistMap.get(b);
-                if (hi !== undefined) wrap.dataset.historyIndex = hi;
+                // 直接从气泡上读下标，渲染时已打好
+                const hi = b.dataset.historyIndex;
+                if (hi !== undefined && hi !== '') wrap.dataset.historyIndex = hi;
             });
         } else {
             trashBtn.style.color = ''; confirmBar.style.display = 'none';
