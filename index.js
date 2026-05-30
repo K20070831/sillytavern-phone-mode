@@ -2,14 +2,22 @@
     await new Promise(r => setTimeout(r, 1000));
 
     const SAVE_LIMIT = 60, CONTEXT_LIMIT = 20, BIDIRECTIONAL_LIMIT = 20, MAX_BIDIRECTIONAL = 5;
-    const BIDIRECTIONAL_KEY = 'PHONE_SMS_MEMORY', VOICE_MAX_SEC = 60, MODEL_VISIBLE_ROWS = 4, MAX_GROUP_MEMBERS = 7; 
+    const BIDIRECTIONAL_KEY = 'PHONE_SMS_MEMORY', VOICE_MAX_SEC = 60, MODEL_VISIBLE_ROWS = 4, MAX_GROUP_MEMBERS = 13; 
     const BI_INJECT_DEPTH = 2;
     const POPOVER_SUPPORTED = typeof HTMLElement !== 'undefined' && HTMLElement.prototype.hasOwnProperty('popover');
     const GROUP_COLORS = [
-        { bg: '#e9e9eb', text: '#000' }, { bg: '#b8e6c8', text: '#1b4332' },
-        { bg: '#f5d0d0', text: '#4a2030' }, { bg: '#d4d0f5', text: '#2d2252' },
-        { bg: '#f5e6b8', text: '#4a3a10' },
-        { bg: '#cceef5', text: '#144652' }, 
+        { bg: '#e9e9eb', text: '#000' },     // 默认灰
+        { bg: '#b8e6c8', text: '#1b4332' },  // 薄荷绿
+        { bg: '#f5d0d0', text: '#4a2030' },  // 浅玫红
+        { bg: '#d4d0f5', text: '#2d2252' },  // 薰衣草紫
+        { bg: '#f5e6b8', text: '#4a3a10' },  // 暖杏黄
+        { bg: '#cceef5', text: '#144652' },  // 天蓝
+        { bg: '#ffd6a5', text: '#5c3200' },  // 蜜橙
+        { bg: '#d0f0e8', text: '#0d3b2e' },  // 碧绿
+        { bg: '#f0d4f5', text: '#3b0d52' },  // 丁香紫
+        { bg: '#fce4b8', text: '#4a2800' },  // 琥珀
+        { bg: '#c8dff5', text: '#0d2952' },  // 钢蓝
+        { bg: '#f5d4e4', text: '#4a0d2a' },  // 樱粉
     ];
 
     // ========== IndexedDB 工具 ==========
@@ -808,7 +816,23 @@
                 t = t.replace(/^[)）]+\s*/, '').replace(/\s*[)）]+$/, '');
             }
             return t;
-        }).filter(Boolean).slice(0, 8);
+        }).filter(Boolean)
+          .flatMap(s => {
+              // 把含 [emo:...] 的片段按标记边界拆成独立气泡
+              const parts = []; let lastIdx = 0, em;
+              const emoRe = /\[emo:[^\]]+\]/g;
+              emoRe.lastIndex = 0;
+              while ((em = emoRe.exec(s)) !== null) {
+                  const before = s.slice(lastIdx, em.index).trim();
+                  if (before) parts.push(before);
+                  parts.push(em[0]);
+                  lastIdx = em.index + em[0].length;
+              }
+              const after = s.slice(lastIdx).trim();
+              if (after) parts.push(after);
+              return parts.length ? parts : [s];
+          })
+          .filter(Boolean).slice(0, 12);
     }
 
     function parseGroupResponse(raw) {
@@ -1102,8 +1126,22 @@ ${currentPersona}：`;
         const input = phoneWindow.querySelector('.pm-input');
         const val = input.value.trim(); if (!val) return; input.value = '';
         const protect = val.replace(/[\(（][^)）]+[\)\）]/g, m => m.replace(/\//g, '\u0001'));
-        protect.split(/[/／]/).map(s => s.replace(/\u0001/g, '/').trim()).filter(Boolean)
-            .forEach(chunk => addBubble(chunk, 'right'));
+        const rawChunks = protect.split(/[/／]/).map(s => s.replace(/\u0001/g, '/').trim()).filter(Boolean);
+        // 把含 [emo:...] 的 chunk 按标记边界再拆成独立气泡
+        const userBubbles = rawChunks.flatMap(chunk => {
+            const parts = []; let lastIdx = 0, m;
+            const emoRe = /\[emo:[^\]]+\]/g;
+            while ((m = emoRe.exec(chunk)) !== null) {
+                const before = chunk.slice(lastIdx, m.index).trim();
+                if (before) parts.push(before);
+                parts.push(m[0]);
+                lastIdx = m.index + m[0].length;
+            }
+            const after = chunk.slice(lastIdx).trim();
+            if (after) parts.push(after);
+            return parts.length ? parts : [chunk];
+        });
+        userBubbles.forEach(chunk => addBubble(chunk, 'right'));
         isGenerating = true; input.disabled = true;
         const btn = phoneWindow.querySelector('.pm-up-btn'); if (btn) btn.disabled = true;
         showTyping();
