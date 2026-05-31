@@ -1565,11 +1565,13 @@ ${currentPersona}：`;
 
         const systemPrompt = isGroup ? `你同时扮演群聊中的所有成员。\n【务必直接按格式输出短信内容，严禁在开头输出“好的”等废话。】` : `你正在扮演"${contactName}"通过手机短信与用户 ${userName} 聊天。\n【务必直接按格式输出短信内容，严禁在开头输出“好的”等废话。】`;
         // 修复：注入表情包提示词（与 fetchSMS 保持一致）
+        // 修复：群聊拍一拍使用 contactName（即 currentGroupKey），单人使用 contactName，两者相同，已正确
         const emojiPrompt = getEmojiPrompt(contactName);
         const userPrompt = (isGroup
             ? `群聊名称：${groupMeta.name}\n群聊成员：${groupMeta.members.join('、')}\n\n用户有一段时间没有说话。请以所有群成员的身份，根据各自的性格、人设和当前聊天上下文，自然地发起话题或继续聊天。每个成员根据人设决定发言 0-8 句。\n\n输出格式：角色名：消息 / 消息\n\n【用户信息】\n${userBlock}\n\n【角色设定】\n${cardDesc || ''}\n\n【性格】\n${cardPersonality || ''}\n\n【场景】\n${cardScenario || ''}\n\n【世界书】\n${worldBookText || ''}\n\n【主线最近对话】\n${mainChatText || ''}\n\n【群聊历史】\n${smsHistoryText}`
-            : `用户有一段时间没有回复。作为${contactName}，根据你的人设和当前聊天情境，自然地发送 3-8 句短信继续对话或发起新话题，不要提及用户没有回复这件事。\n\n【用户信息】\n${userBlock}\n\n【角色设定】\n${cardDesc || ''}\n\n【性格】\n${cardPersonality || ''}\n\n【场景】\n${cardScenario || ''}\n\n【对话示例】\n${cardMesExample || ''}\n\n【世界书】\n${worldBookText || ''}\n\n【主线最近对话】\n${mainChatText || ''}\n\n【短信对话历史】\n${smsHistoryText}\n\n输出格式：短信内容 / 短信内容（每句用 / 分隔，特殊格式中文单行闭合）`)
-            + (emojiPrompt ? emojiPrompt : '')
+              + (emojiPrompt ? emojiPrompt : '')
+            : `用户有一段时间没有回复。作为${contactName}，根据你的人设和当前聊天情境，自然地发送 3-8 句短信继续对话或发起新话题，不要提及用户没有回复这件事。\n\n【用户信息】\n${userBlock}\n\n【角色设定】\n${cardDesc || ''}\n\n【性格】\n${cardPersonality || ''}\n\n【场景】\n${cardScenario || ''}\n\n【对话示例】\n${cardMesExample || ''}\n\n【世界书】\n${worldBookText || ''}\n\n【主线最近对话】\n${mainChatText || ''}\n\n【短信对话历史】\n${smsHistoryText}\n\n输出格式：短信内容 / 短信内容（每句用 / 分隔，特殊格式中文单行闭合）`
+              + (emojiPrompt ? emojiPrompt : ''))
             + getWordyPrompt();
 
         try {
@@ -1800,9 +1802,13 @@ ${currentPersona}：`;
             ? `你同时扮演群聊中的所有成员。\n【务必直接按格式输出短信内容，严禁在开头输出“好的”等废话。】`
             : `你正在扮演"${contactName}"通过手机短信与用户 ${userName} 聊天。\n【务必直接按格式输出短信内容，严禁在开头输出“好的”等废话。】`;
 
+        // 修复：注入表情包提示词（与 fetchSMS 保持一致）
+        const targetContactKey = isGroupChat ? currentGroupKey : contactName;
+        const emojiPrompt = getEmojiPrompt(targetContactKey);
         const userPrompt = isGroupChat
             ? `群聊名称：${groupDisplayName || '群聊'}\n群聊成员：${groupMembers.join('、')}\n\n请以所有群成员的身份，根据各自的性格和当前聊天上下文，自然地发起话题或继续聊天。每个成员根据人设决定发言 0-8 句。\n\n输出格式：角色名：消息内容 / 消息内容\n\n【用户信息】\n${userBlock}\n\n【角色设定】\n${cardDesc || ''}\n\n【性格】\n${cardPersonality || ''}\n\n【场景】\n${cardScenario || ''}\n\n【世界书】\n${worldBookText || ''}\n\n【主线最近对话】\n${mainChatText || ''}\n\n【群聊历史】\n${smsHistoryText}`
             : `作为${contactName}，根据你的人设、性格和当前聊天情境，自然地发送 3-8 句短信，不要提及任何外部触发，就像你自己突然想发消息一样。\n\n【用户信息】\n${userBlock}\n\n【角色设定】\n${cardDesc || ''}\n\n【性格】\n${cardPersonality || ''}\n\n【场景】\n${cardScenario || ''}\n\n【对话示例】\n${cardMesExample || ''}\n\n【世界书】\n${worldBookText || ''}\n\n【主线最近对话】\n${mainChatText || ''}\n\n【短信对话历史】\n${smsHistoryText}\n\n输出格式：短信内容 / 短信内容（每句用 / 分隔，特殊格式中文单行闭合）`
+            + (emojiPrompt ? emojiPrompt : '')
             + getWordyPrompt();
 
         try {
@@ -3151,5 +3157,5 @@ ${currentPersona}：`;
     loadHistoriesFromIDB();
     setTimeout(() => { migrateOldHistory(); applyBidirectionalInjection(); hookGenerationEvent(); }, 1500);
 
-    console.log('[phone-mode] v9.4-fix2 已加载：修复表情包移动端滑动切换/联系人串卡/删除后重现等问题');
+    console.log('[phone-mode] v9.4-fix3 已加载：修复拍一拍（单联系人/群聊）不注入表情包提示词的问题');
 })();
