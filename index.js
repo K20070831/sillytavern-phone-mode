@@ -2002,7 +2002,7 @@ ${currentPersona}：`;
 
         const systemPrompt = `你同时扮演群聊中的所有成员。\n【务必直接按格式输出短信内容，严禁在开头输出“好的”等废话。】`;
         const userPrompt = `群聊名称：${groupDisplayName || '群聊'}\n群聊成员：${groupMembers.join('、')}\n\n请以每个群成员的身份，根据各自的性格、人设和当前聊天上下文，自然地发起话题或继续聊天，不要提及任何外部触发。\n每个成员根据自己的判断选择发言 0-8 条。\n\n输出格式：角色名：消息内容 / 消息内容\n\n【用户信息】\n${userBlock}\n\n【角色设定】\n${cardDesc || ''}\n\n【性格】\n${cardPersonality || ''}\n\n【场景】\n${cardScenario || ''}\n\n【世界书】\n${worldBookText || ''}\n\n【主线最近对话】\n${mainChatText || ''}\n\n【群聊历史】\n${smsHistoryText}`
-            + getWordyPrompt();
+            + (getEmojiPrompt(currentGroupKey) || '') + getWordyPrompt();
 
         try {
             const raw = await callAI(systemPrompt, userPrompt);
@@ -2606,6 +2606,8 @@ ${currentPersona}：`;
         try { localStorage.setItem('ST_SMS_DATA_V2', JSON.stringify(window.__pmHistories)); } catch (e) {};
         saveGroupMeta();
         applyBidirectionalInjection();
+        // 修复：删除当前会话后清空全局状态，防止后续切换时落盘把已删记录写入新目标
+        if (currentGroupKey === key) { isGroupChat = false; currentGroupKey = ''; currentPersona = ''; conversationHistory = []; groupMembers = []; groupDisplayName = ''; groupColorMap = {}; }
         window.__pmShowList();
     };
 
@@ -2620,6 +2622,8 @@ ${currentPersona}：`;
         }
         const groupMeta = window.__pmGroupMeta[id]?.[key];
         if (groupMeta) {
+        // 修复：在修改全局状态前快照旧 saveKey，防止落盘时把当前会话记录写入目标会话
+        const _prevSaveKey = isGroupChat && currentGroupKey ? currentGroupKey : currentPersona;
             isGroupChat = true; currentGroupKey = key;
             groupMembers = groupMeta.members.slice();
             groupDisplayName = groupMeta.name;
@@ -2628,7 +2632,7 @@ ${currentPersona}：`;
         } else {
             isGroupChat = false; groupMembers = []; groupColorMap = {}; groupDisplayName = ''; currentGroupKey = '';
         }
-        window.__pmSwitch(key);
+        window.__pmSwitch(key, _prevSaveKey);
     };
 
     window.__pmSwitch = (name, _prevSaveKey) => {
@@ -2711,6 +2715,8 @@ ${currentPersona}：`;
         }
 
         applyBidirectionalInjection();
+        // 修复：删除当前联系人后清空全局状态，防止后续切换时落盘把已删记录写入新目标
+        if (!isGroupChat && currentPersona === name) { currentPersona = ''; conversationHistory = []; }
         window.__pmShowList();
     };
 
@@ -3160,5 +3166,5 @@ ${currentPersona}：`;
     loadHistoriesFromIDB();
     setTimeout(() => { migrateOldHistory(); applyBidirectionalInjection(); hookGenerationEvent(); }, 1500);
 
-    console.log('[phone-mode] v9.4-fix4 已加载：修复新建群聊时继承上一个联系人聊天记录的问题');
+    console.log('[phone-mode] v9.4-fix5 已加载：修复群聊拍一拍不注入表情包、删除会话后切换目标被覆盖的问题');
 })();
